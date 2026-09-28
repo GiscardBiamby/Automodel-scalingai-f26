@@ -262,4 +262,6 @@ if __name__ == "__main__":
     fig_timeline("_baseline_nsys", "Baseline: one step on GPU 0 (4 micro-batches); red = TE/cuDNN attention graph builds",
                  "timeline_baseline.png")
     fig_timeline("_pack4096_nsys", "THD packing: one training step on GPU 0 (2 micro-batches)", "timeline_pack4096.png")
+    fig_timeline("_final6_nsys", "Final 6-GPU config: one step on GPU 0 (8 packs, full AC except attention)",
+                 "timeline_final6.png")
     print("wrote", sorted(p.name for p in OUT.glob("*.png")))

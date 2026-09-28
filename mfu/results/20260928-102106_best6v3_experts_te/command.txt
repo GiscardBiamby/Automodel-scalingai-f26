@@ -1,0 +1,1 @@
+torchrun --standalone --nproc-per-node 6 -m nemo_automodel.cli.app /opt/Automodel/mfu/runs/20260928-102106_best6v3_experts_te/config.yaml --checkpoint.checkpoint_dir=/opt/Automodel/mfu/runs/20260928-102106_best6v3_experts_te --wandb.name=20260928-102106_best6v3_experts_te --step_scheduler.max_steps=30 --model.backend.experts=te 

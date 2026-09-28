@@ -202,12 +202,14 @@ producing `[128, 5568, 896]` instead of `[128, 1856, 2688]` (`a11eba86`); (iii) 
 ![6-GPU progression](results/figures/mfu_6gpu_progression.png)
 
 **Result:** 13,887 tokens/s/GPU and 27.2% useful MFU on 6 GPUs, **29.2× the 6-GPU baseline** and 17% more per GPU than
-the 8-GPU best configuration (11,836). The profile of the adopted config (before steps 5-6) shows the GPUs 97.6%
-busy, compute kernels 83% of the step and GEMMs at ~73% of BF16 peak (counting the checkpointing recompute), so the
-remaining headroom is mostly the checkpointing recompute itself, FSDP copy kernels (12%), DeepEP (10%) and Mamba
-kernels (10%). Caveat: this configuration uses a larger global batch (48 packs ≈ 190k tokens/step vs ≈ 53k in the
-baseline); with FSDP-sharded experts, throughput is coupled to micro-batch size because weight traffic is paid per
-micro-batch and gradient accumulation cannot amortise it.
+the 8-GPU best configuration (11,836). Profile of the final config (`runs/*_final6_nsys`, 2,283 ms/step): GPUs 97.5%
+busy, compute kernels 87.9% of the step, communication 21.4% of which only 9.6% is exposed (was 29%); GEMMs are half
+the step (49.5%) at ~73% of BF16 peak counting the checkpointing recompute. What remains: GEMM recompute from full AC,
+Mamba kernels (11%), FSDP copy kernels (10%), DeepEP (5.3%, was 10%). Caveat: this configuration uses a larger global
+batch (48 packs ≈ 190k tokens/step vs ≈ 53k in the baseline); with FSDP-sharded experts, throughput is coupled to
+micro-batch size because weight traffic is paid per micro-batch and gradient accumulation cannot amortise it.
+
+![final 6-GPU timeline](results/figures/timeline_final6.png)
 
 ## 7. Recommendations: what to optimise next (ranked by evidence × expected gain)
 

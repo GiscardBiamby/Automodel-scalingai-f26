@@ -1,0 +1,101 @@
+# Best configuration on 6 GPUs (host GPUs 2-7; GPUs 0-1 left to groupmates). Launch with
+#   mfu/run.sh -c mfu/configs/nemotron_nano_v3_squad_best_6gpu.yaml --devices 2,3,4,5,6,7
+# Differences from nemotron_nano_v3_squad_best.yaml (8 GPUs): ep_size 8 -> 2 (6 is not a divisor of 128 experts),
+# reshard_after_forward true (experts are now FSDP-sharded 3 ways), full activation checkpointing and 8 packs/GPU
+# (global batch 48 packs), bf16 gradient reduction. Measured: 12,872 tok/s/GPU, 25.2% useful MFU
+# (mfu/results/experiments_6gpu.md).
+
+recipe: TrainFinetuneRecipeForNextTokenPrediction
+
+step_scheduler:
+  global_batch_size: 48   # 6 GPUs x 8 packs, no gradient accumulation (~190k real tokens/step)
+  local_batch_size: 8     # 8 packs/GPU: FSDP expert traffic is paid per micro-batch, so bigger micro-batches amortise it
+  gc_every_steps: 50      # disable automatic Python GC (gen-2 pauses ~1 s); manual gen-1 collect every 50 steps
+  ckpt_every_steps: 1000
+  val_every_steps: 1000
+  max_steps: 40
+
+dist_env:
+  backend: nccl
+  timeout_minutes: 10
+
+rng:
+  _target_: nemo_automodel.components.training.rng.StatefulRNG
+  seed: 1111
+  ranked: true
+
+model:
+  _target_: nemo_automodel.NeMoAutoModelForCausalLM.from_pretrained
+  pretrained_model_name_or_path: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
+  trust_remote_code: true
+  output_hidden_states: true   # required by FusedLinearCrossEntropy
+
+checkpoint:
+  enabled: false
+  checkpoint_dir: mfu/runs/_unnamed  # also where training.jsonl is written; run.sh overrides it per run
+
+distributed:
+  strategy: fsdp2
+  dp_size: none
+  tp_size: 1
+  cp_size: 1
+  ep_size: 2          # must divide both 6 GPUs and 128 experts
+  reshard_after_forward: true   # experts are FSDP-sharded over 3 ranks; keeping them gathered after forward OOMs
+  activation_checkpointing: true  # full AC frees the memory for 8 packs/GPU (selective AC was slower: 9.3k vs 10.2k tok/s at 4 packs)
+  mp_policy:   # bf16 gradient reduce-scatter: halves expert-gradient traffic (+2.9% tok/s; loss identical over 30 steps).
+    _target_: torch.distributed.fsdp.MixedPrecisionPolicy  # Caveat (lecture 7/8): bf16 grad reduction can hurt very long runs.
+    param_dtype: bfloat16
+    reduce_dtype: bfloat16
+    output_dtype: bfloat16
+  sequence_parallel: false
+  defer_fsdp_grad_sync: false
+
+loss_fn:
+  _target_: nemo_automodel.components.loss.linear_ce.FusedLinearCrossEntropy  # no [tokens x 131k] fp32 logits
+
+dataset:
+  _target_: nemo_automodel.components.datasets.llm.squad.make_squad_dataset
+  dataset_name: rajpurkar/squad
+  split: train
+
+packed_sequence:
+  packed_sequence_size: 4096
+  packing_strategy: thd
+
+dataloader:
+  _target_: torchdata.stateful_dataloader.StatefulDataLoader
+  collate_fn: nemo_automodel.components.datasets.utils.packed_sequence_thd_collater
+  shuffle: True
+
+validation_dataset:
+  _target_: nemo_automodel.components.datasets.llm.squad.make_squad_dataset
+  dataset_name: rajpurkar/squad
+  split: validation
+  limit_dataset_samples: 64
+
+validation_dataloader:
+  _target_: torchdata.stateful_dataloader.StatefulDataLoader
+  collate_fn: nemo_automodel.components.datasets.utils.packed_sequence_thd_collater
+
+optimizer:
+  _target_: torch.optim.Adam
+  betas: [0.9, 0.999]
+  eps: 1e-8
+  lr: 1.0e-5
+  weight_decay: 0
+  fused: true   # single fused multi-tensor Adam kernel path (+3.4% tok/s on 6 GPUs, same loss)
+
+lr_scheduler:
+  lr_decay_style: cosine
+  min_lr: 1.0e-6
+
+mfu:
+  peak_tflops: 989  # H100 SXM dense BF16
+
+nvtx: false
+
+wandb:
+  enable: true
+  entity: scalingai-f26
+  project: nemotron-nano-v3-mfu
+  mode: online

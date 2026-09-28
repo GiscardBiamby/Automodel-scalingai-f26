@@ -1,0 +1,1 @@
+torchrun --standalone --nproc-per-node 6 -m nemo_automodel.cli.app /opt/Automodel/mfu/runs/20260928-102541_best6v3_deepep_sms32/config.yaml --checkpoint.checkpoint_dir=/opt/Automodel/mfu/runs/20260928-102541_best6v3_deepep_sms32 --wandb.name=20260928-102541_best6v3_deepep_sms32 --step_scheduler.max_steps=30 --model.backend.dispatcher_num_sms=32 

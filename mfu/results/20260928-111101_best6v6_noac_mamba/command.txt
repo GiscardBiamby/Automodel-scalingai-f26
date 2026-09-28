@@ -1,0 +1,1 @@
+torchrun --standalone --nproc-per-node 6 -m nemo_automodel.cli.app /opt/Automodel/mfu/runs/20260928-111101_best6v6_noac_mamba/config.yaml --checkpoint.checkpoint_dir=/opt/Automodel/mfu/runs/20260928-111101_best6v6_noac_mamba --wandb.name=20260928-111101_best6v6_noac_mamba --step_scheduler.max_steps=30 --distributed.activation_checkpointing_skip_block_types=\[mamba\] 
