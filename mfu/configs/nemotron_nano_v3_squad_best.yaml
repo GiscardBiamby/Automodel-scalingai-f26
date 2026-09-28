@@ -1,16 +1,16 @@
-# Best configuration found (config "E" in mfu/REPORT.md): 10.5x the baseline's tokens/s/GPU at the same loss curve.
+# Best configuration on 8 GPUs (round 2, mfu/results/experiments_8gpu_round2.md): 15,172 tok/s/GPU, 29.7% useful MFU,
+# 13.5x the shipped recipe's 1,127 tok/s/GPU.
 #
-# = baseline + THD packing into 4096-token rows (fixed shapes, 97% fill) + FusedLinearCrossEntropy
-#   + 2 packs/GPU (no gradient accumulation) + manual Python GC + fused Adam.
-# Equivalent to the pack4096 config with these CLI overrides (how it was measured):
-#   --loss_fn._target_=nemo_automodel.components.loss.linear_ce.FusedLinearCrossEntropy --model.output_hidden_states=true
-#   --step_scheduler.local_batch_size=2 --step_scheduler.gc_every_steps=50
+# = baseline + THD packing into 4096-token rows (fixed shapes, 97% fill) + FusedLinearCrossEntropy + fused Adam
+#   + manual Python GC + bf16 gradient reduction + TE RMSNorm + 96 DeepEP SMs + FP8 dense linears
+#   + 3 packs/GPU with no gradient accumulation and no activation checkpointing.
+# Round 1 (mfu/REPORT.md config E) was 2 packs/GPU without the backend / mp_policy changes: 11,836 tok/s/GPU.
 
 recipe: TrainFinetuneRecipeForNextTokenPrediction
 
 step_scheduler:
-  global_batch_size: 16   # packs of 4096 tokens (~20 SQuAD samples each at 97% fill) -> ~63k real tokens/step
-  local_batch_size: 2     # 2 packs/GPU -> no gradient accumulation (fits thanks to FusedLinearCrossEntropy)
+  global_batch_size: 24   # packs of 4096 tokens (~20 SQuAD samples each at 97% fill) -> ~95k real tokens/step
+  local_batch_size: 3     # 3 packs/GPU, no gradient accumulation, no AC (peak 70.5 GiB; 4 packs OOM, 4+AC slower)
   gc_every_steps: 50      # disable automatic Python GC (gen-2 pauses ~1 s); manual gen-1 collect every 50 steps
   ckpt_every_steps: 1000
   val_every_steps: 1000
@@ -30,6 +30,13 @@ model:
   pretrained_model_name_or_path: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
   trust_remote_code: true
   output_hidden_states: true   # required by FusedLinearCrossEntropy
+  backend:   # defaults except:
+    _target_: nemo_automodel.components.models.common.BackendConfig
+    rms_norm: te              # was torch_fp32: +1.5%
+    dispatcher_num_sms: 96    # DeepEP SMs (default 20): +11.4% at EP=8
+    te_fp8:                   # FP8 (current scaling) for TE linears; experts BF16, LM head high precision: +0.6%
+      _target_: nemo_automodel.components.models.common.utils.TEFp8Config
+      recipe: current
 
 checkpoint:
   enabled: false
@@ -42,6 +49,11 @@ distributed:
   cp_size: 1
   ep_size: 8
   sequence_parallel: false
+  mp_policy:   # bf16 gradient reduce-scatter: +1.9% (lecture caveat on very long runs)
+    _target_: torch.distributed.fsdp.MixedPrecisionPolicy
+    param_dtype: bfloat16
+    reduce_dtype: bfloat16
+    output_dtype: bfloat16
   defer_fsdp_grad_sync: false
 
 loss_fn:
