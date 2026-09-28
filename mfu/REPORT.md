@@ -209,24 +209,28 @@ micro-batch and gradient accumulation cannot amortise it.
 
 ## 7. Recommendations: what to optimise next (ranked by evidence × expected gain)
 
-1. **Make fixed shapes the default for SQuAD-style SFT.** Ship Nano-V3 SQuAD with THD packing (or at least
-   `pad_seq_len_divisible`); the cuDNN re-plan cost (~1 s per new shape, per rank) turns any variable-length
-   pad-to-longest recipe into a host-bound one. Upstream PR candidate: a `nemotron_nano_v3_squad.yaml` with packing,
-   plus a warning when TE fused attention sees many distinct shapes.
-2. **Take DeepEP off the critical path (≈22% of the packed step).** Try `backend.dispatcher_async_dispatch: true`
-   (prepared but not measured: a groupmate was actively using GPU 0 and the run guard declined to start)
-   and overlap the shared-expert MLP with dispatch/combine on a side stream (Automodel already has
-   `shared_expert_overlap` for Kimi K3; Nemotron-V3 does not opt in). Expected: hide most of the 211 ms.
-3. **Overlap and shrink FSDP traffic (≈16%, 3.7% overlapped).** Larger FSDP units/buckets (the `RING_LL` protocol
-   shows messages are small), bf16 reduce-scatter instead of fp32 (halves bytes; check convergence), explicit
-   forward/backward prefetch, and `defer_fsdp_grad_sync: true` whenever gradient accumulation is used.
-4. **Cut per-layer host overhead (GPU idle 18%).** CUDA graphs for the Mamba mixer and MoE router/permute
-   (Automodel's partial CUDA-graph manager), or `torch.compile` of the Mamba pre/post-processing; bigger micro-batches
-   help for the same reason (D: +22%).
-5. **Optimizer (6%).** Fused Adam (`fused=True` / TE FusedAdam) instead of the foreach path; at 65k tokens/step the
-   step is short enough that a 61 ms optimizer matters. Larger global batches amortise it further (the upstream
-   benchmark's 2.1M-token step is one reason it reaches 33.6%).
-6. **Control Python GC** (`gc_every_steps`): removes the periodic ~1 s pauses (−9% mean step time on D, below).
+Status after both loops: ✅ done and measured, ❌ tried and rejected/blocked, ▶ open.
+
+1. ✅ **Fixed shapes for SQuAD-style SFT** (THD packing; `pad_seq_len_divisible` at minimum). The cuDNN re-plan cost
+   (~1 s per new shape, per rank) turns any variable-length pad-to-longest recipe into a host-bound one (2.2% → 18.1%
+   useful MFU on 8 GPUs). Upstream PR candidate: a `nemotron_nano_v3_squad.yaml` with packing, plus a warning when TE
+   fused attention sees many distinct shapes.
+2. ✅ **More tokens per micro-batch, paid for with memory tricks**: fused linear-CE (no 131k-vocab logits), no gradient
+   accumulation, and on 6 GPUs 8 packs/GPU with full activation checkpointing (+81%). This is the single largest lever
+   once shapes are fixed, because per-micro-batch costs (FSDP expert all-gathers, per-layer host work) are amortised.
+3. ✅ **DeepEP tuning**: 64 SMs instead of 20 (+4.7% at EP=2). ❌ `dispatcher_async_dispatch` (−5.7%): without work
+   to overlap, async only adds synchronisation. ▶ Next: overlap the shared-expert MLP with dispatch/combine on a side
+   stream (Automodel's `shared_expert_overlap` exists for Kimi K3 only; lecture 7 found it roughly neutral there).
+4. ✅ **FSDP traffic**: bf16 gradient reduce-scatter (+2.9%, identical loss over 30 steps; lecture caveat for very long
+   runs), explicit MoE prefetch implemented (overlap 3.7% → 23%). ▶ Next: FSDP2 copy-in/out kernels are still ~12% of
+   the step; a persistent-buffer FSDP (Megatron-FSDP) would remove them but is not wired up for EP models.
+5. ✅ **Kernel choices**: fused Adam (+3.4%), TE RMSNorm (+2.1%). ❌ FP8: blocked by the Nemotron-V3 adapter (no TE
+   GroupedLinear layout for experts) and one TE linear seeing a `[1, 2688]` input; with GEMMs already at ~73% of BF16
+   peak, FP8 on the expert GEMMs (~22% of the step) is the largest remaining compute lever (≤ ~10%).
+6. ✅ **Host-side hygiene**: control Python GC (`gc_every_steps`, −9% mean step time on 8 GPUs). ▶ CUDA graphs for the
+   Mamba mixer / MoE router matter again whenever the configuration is host-bound (e.g. 8 GPUs at small micro-batch).
+7. ▶ **Checkpointing recompute** (~⅓ extra forward) is the largest remaining non-communication overhead on 6 GPUs; the
+   new `activation_checkpointing_skip_block_types` knob buys some of it back where memory allows (see §6b).
 
 **GC experiment (spike attribution).** On config D, the ~1 s spikes occur *between* training steps (every captured
 `train_step` NVTX range is ~0.95 s, so the extra time is outside forward/backward/optimizer). SQuAD is held as Python
