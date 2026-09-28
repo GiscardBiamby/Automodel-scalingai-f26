@@ -217,7 +217,7 @@ producing `[128, 5568, 896]` instead of `[128, 1856, 2688]` (`a11eba86`); (iii) 
 | - | shared-expert side-stream overlap (ported to the generic MoE) | 13,702 | | −1.3% (−3.6% with 32 DeepEP SMs): competes with DeepEP for SMs; rejected |
 | - | also skip AC on 8 of 23 Mamba layers (`activation_checkpointing_skip_layers`) | 13,069 | | −5.9% at 63.9 GiB (likely allocator pressure); rejected |
 | 8 | DeepEP 96 SMs | 13,953 | 27.3% | +0.5% vs 64 SMs |
-| 9 | FP8 (current scaling) on the dense TE linears; LM head kept high-precision (framework fix) | **14,326** | **28.0%** | +2.7%; loss tracks BF16 (0.772 vs 0.777 at step 29); expert GEMMs stay BF16 |
+| 9 | FP8 (current scaling) on TE linears = attention + shared experts (~18% of GEMM FLOPs); LM head kept high-precision (framework fix) | **14,326** | **28.0%** | +2.7%; loss tracks BF16 (0.772 vs 0.777 at step 29); expert GEMMs stay BF16 |
 
 ![6-GPU progression](results/figures/mfu_6gpu_progression.png)
 
@@ -245,9 +245,21 @@ largest losses.
 | 2 | bf16 gradient reduce-scatter | 12,666 | 24.8% | +1.9% | smaller than on 6 GPUs: only non-expert grads are reduced over FSDP |
 | 3 | TE RMSNorm | 12,852 | 25.2% | +1.5% | |
 | 4 | DeepEP 96 SMs (default 20) | 14,318 | 28.0% | **+11.4%** | DeepEP dispatch/combine was ~22% of the step at EP=8 and sits on the critical path |
-| 5 | FP8 dense linears | 14,395 | 28.2% | +0.5% | GEMMs are a smaller share at 8 GPUs, so FP8 barely helps |
+| 5 | FP8 on TE linears (attention + shared experts only) | 14,395 | 28.2% | +0.5% | see note below: FP8 covers only ~18% of GEMM FLOPs (4.2% of the step) and adds 15 ms/step of cast/amax kernels |
 | 6 | 3 packs/GPU, no AC (GBS 24) | **15,172** | **29.7%** | +5.4% | more tokens per per-layer host/launch cost; largest batch that fits without AC |
 | ✗ | 4 packs + full AC / 8 packs + full AC / 4 packs + AC on MoE only | 12,698 / 13,427 / 13,554 | | −12 / −7 / −6% | no expert all-gather to amortise at EP=8, so recompute is pure cost (the 6-GPU winner does not transfer) |
+
+**Why FP8 barely helps here (measured in the final 8-GPU trace).** TE FP8 only applies to TE linear modules, which in
+Nemotron-V3 are the attention projections and the shared experts (~18% of matmul FLOPs). The routed experts (43%,
+`torch._grouped_mm`) and the Mamba projections (28%: `in_proj` is a plain `nn.Linear`, `out_proj` is fused into the
+Mamba kernel) stay BF16, and the LM head (11%) is deliberately kept out of FP8. Per 784 ms step, the FP8 GEMMs
+(`nvjet_qq*`/`nvjet_qr*`) take ~33 ms (4.2%) while current-scaling cast/amax/transpose kernels add 15 ms (1,120
+extra launches), so even a perfect 2× on the covered GEMMs could net at most ~2%; measured +0.5%. On 6 GPUs the same
+change gave +2.7% because full AC runs every forward GEMM twice, micro-batches were 2.7× larger (better FP8 GEMM
+efficiency, conversion overhead amortised) and GEMMs were 50% of a GPU-bound step. Making FP8 matter requires the
+BF16 GEMMs: routed experts via TE GroupedLinear (blocked, §7) and Mamba `in_proj` as a TE linear. The same trace
+shows ~14 ms/step (1.8%) of FP32 GEMMs on CUDA cores (`sm80_xmma_gemm_f32f32…ffma`, `cutlass_80_simt_sgemm`, 23
+calls/step each, consistent with the FP32 MoE router without TF32).
 
 The key contrast: **the same change (bigger micro-batch paid for by activation checkpointing) is +81% on 6 GPUs
 and −7…−12% on 8 GPUs**, and the profiles explain why. On 6 GPUs the step was dominated by expert-weight
@@ -286,7 +298,10 @@ Status after both loops: ✅ done and measured, ❌ tried and rejected/blocked, 
    runs), explicit MoE prefetch implemented (overlap 3.7% → 23%). ▶ Next: FSDP2 copy-in/out kernels are still ~12% of
    the step; a persistent-buffer FSDP (Megatron-FSDP) would remove them but is not wired up for EP models.
 5. ✅ **Kernel choices**: fused Adam (+3.4%), TE RMSNorm (+2.1%), FP8 on dense TE linears (+2.7%, LM head kept
-   high-precision). ▶ FP8 on the expert GEMMs (~22% of the step) is the largest remaining compute lever (≤ ~10%).
+   high-precision; covers only attention + shared experts, ~18% of GEMM FLOPs, so +2.7% on 6 GPUs and +0.5% on 8).
+   ▶ FP8 on the expert GEMMs (~22% of the step) is the largest remaining compute lever (≤ ~10%); Mamba `in_proj`
+   (a plain `nn.Linear`) could be made a TE linear to become FP8-eligible; the FP32 router GEMMs run on CUDA cores
+   (~1.8% of the 8-GPU step) and could use TF32/BF16.
    It needs `experts: te` to load under EP×FSDP expert sharding: TE GroupedLinear exposes `down_projs` /
    `gate_and_up_projs` as virtual stacked copies, and the HF→native conversion does not produce them, so DCP's
    load planner reports `Missing key ... experts.down_projs` (the uneven-shard part is already fixed, `def7b8de`).

@@ -12,7 +12,7 @@ the row above; 30-step runs, medians of steps 5+. Useful MFU = real tokens/s/GPU
 | e8_r2_rmsnorm | + TE RMSNorm | 12,852 | 25.2% | 0.618 | 56.8 GiB | +1.5% |
 | e8_r3_sms64 | + DeepEP 64 SMs | 14,238 | 27.9% | 0.559 | 56.8 GiB | +10.8% (DeepEP ~22% of the step at EP=8) |
 | e8_r3b_sms96 | DeepEP 96 SMs instead | 14,318 | 28.0% | 0.556 | 56.8 GiB | +0.6% vs 64 |
-| e8_r4_fp8 | + FP8 dense linears (at 64 SMs) | 14,330 | 28.1% | 0.555 | 56.1 GiB | +0.6% vs r3 (near noise: GEMMs are a smaller share at 8 GPUs) |
+| e8_r4_fp8 | + FP8 on TE linears (attention + shared experts, ~18% of GEMM FLOPs; at 64 SMs) | 14,330 | 28.1% | 0.555 | 56.1 GiB | +0.6% vs r3 (near noise: GEMMs are a smaller share at 8 GPUs) |
 
 Batch size / activation checkpointing (base = e8_r2 + DeepEP 96 SMs + FP8 dense linears):
 
