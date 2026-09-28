@@ -21,6 +21,7 @@ from nemo_automodel.components.moe.parallelizer import (
     _EMPTY_TENSOR_DETERMINISM_CHECK,
     _moe_checkpoint_metadata_fn,
     _moe_shard_placement,
+    _normalize_block_types,
     _register_moe_checkpoint_determinism_check,
 )
 
@@ -89,3 +90,12 @@ class TestMoeCheckpointMetadata:
 
         assert name == _EMPTY_TENSOR_DETERMINISM_CHECK
         assert torch_checkpoint._allowed_determinism_checks_to_fns[name] is _moe_checkpoint_metadata_fn
+
+
+class TestNormalizeBlockTypes:
+    def test_list_and_cli_string_forms(self):
+        assert _normalize_block_types(["attention", "mamba"]) == {"attention", "mamba"}
+        assert _normalize_block_types("[attention]") == {"attention"}
+        assert _normalize_block_types("[attention, 'mamba']") == {"attention", "mamba"}
+        assert _normalize_block_types(()) == set()
+        assert _normalize_block_types(None) == set()

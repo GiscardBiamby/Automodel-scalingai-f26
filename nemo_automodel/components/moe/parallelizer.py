@@ -119,6 +119,15 @@ def _moe_shard_placement(param, shard_size: int = 1):
     return Shard(0) if param.ndim == 2 else Shard(1)
 
 
+def _normalize_block_types(value: object) -> set[str]:
+    """Normalize a block-type list that may arrive from the CLI as a string such as ``"[attention, mamba]"``."""
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        value = value.strip().strip("[]").split(",")
+    return {str(v).strip().strip("'\"") for v in value if str(v).strip()}
+
+
 def _is_selective_ac(activation_checkpointing: object) -> bool:
     """Return True when the AC mode requests selective checkpointing.
 
@@ -1271,8 +1280,8 @@ def parallelize_model(
         apply_ep(model, moe_mesh[ep_axis_name], moe_mesh=moe_mesh)
 
     if activation_checkpointing:
-        if activation_checkpointing_skip_block_types:
-            skip_types = set(activation_checkpointing_skip_block_types)
+        skip_types = _normalize_block_types(activation_checkpointing_skip_block_types)
+        if skip_types:
             skipped = 0
             for module in model.modules():
                 if getattr(module, "block_type", None) in skip_types:
