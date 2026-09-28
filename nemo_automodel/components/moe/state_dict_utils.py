@@ -232,7 +232,10 @@ def validate_dtensor_expert_sharding(tensor: torch.Tensor, expected_experts: int
 
 
 def create_dtensor_from_local(
-    local_tensor: torch.Tensor, device_mesh: Optional["DeviceMesh"], rank: int | None = None
+    local_tensor: torch.Tensor,
+    device_mesh: Optional["DeviceMesh"],
+    rank: int | None = None,
+    global_shape: tuple[int, ...] | None = None,
 ) -> torch.Tensor:
     """
     Create a DTensor from a local tensor for expert parallelism.
@@ -241,6 +244,9 @@ def create_dtensor_from_local(
         local_tensor: Local portion of the tensor on this rank
         device_mesh: Device mesh for DTensor creation
         rank: Current rank (for device placement)
+        global_shape: Shape of this EP rank's grouped tensor before ``ep_shard`` sharding. When given, the
+            ``ep_shard`` placement follows ``parallelizer._moe_shard_placement`` (dim 1 if it divides evenly,
+            else the first later dim that does); otherwise ``Shard(1)``.
 
     Returns:
         DTensor if device_mesh is provided and DTensor is available, otherwise local_tensor
@@ -271,7 +277,11 @@ def create_dtensor_from_local(
             dim_names_for_placements.append(dim_name)
         elif dim_name == "ep_shard":
             if ep_sharded:
-                placements.append(Shard(1))
+                shard_dim = 1
+                if global_shape is not None and len(global_shape) >= 2:
+                    n_shards = get_submesh(device_mesh, (dim_name,)).size()
+                    shard_dim = next((d for d in range(1, len(global_shape)) if global_shape[d] % n_shards == 0), 1)
+                placements.append(Shard(shard_dim))
                 dim_names_for_placements.append(dim_name)
         elif dim_name == "ep_replicate":
             if ep_sharded:

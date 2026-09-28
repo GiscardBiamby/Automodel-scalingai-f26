@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 import torch
@@ -361,3 +361,48 @@ class TestShouldLoadExpertForRank:
 
         assert should_load_expert_for_rank(2, Mock(), 8)  # Start is inclusive
         assert not should_load_expert_for_rank(4, Mock(), 8)  # End is exclusive
+
+
+class TestCreateDtensorEpShardDim:
+    """ep_shard placement follows parallelizer._moe_shard_placement when the global shape is known."""
+
+    @staticmethod
+    def _placement(global_shape, n_shards):
+        from unittest.mock import patch
+
+        from torch.distributed.tensor import Shard
+
+        from nemo_automodel.components.moe import state_dict_utils
+
+        mesh = MagicMock()
+        mesh.mesh_dim_names = ("ep", "ep_shard")
+        sub = MagicMock()
+        sub.size.return_value = n_shards
+        captured = {}
+
+        def fake_from_local(local, submesh, placements):
+            captured["placements"] = placements
+            return local
+
+        with (
+            patch.object(state_dict_utils, "get_submesh", return_value=sub),
+            patch.object(state_dict_utils.DTensor, "from_local", side_effect=fake_from_local),
+        ):
+            state_dict_utils.create_dtensor_from_local(torch.zeros(1), mesh, global_shape=global_shape)
+        assert captured["placements"][0] == Shard(0)
+        return captured["placements"][1]
+
+    def test_default_is_dim1(self):
+        from torch.distributed.tensor import Shard
+
+        assert self._placement(None, 3) == Shard(1)
+
+    def test_divisible_dim1(self):
+        from torch.distributed.tensor import Shard
+
+        assert self._placement((64, 2048, 768), 4) == Shard(1)
+
+    def test_indivisible_dim1_uses_dim2(self):
+        from torch.distributed.tensor import Shard
+
+        assert self._placement((64, 1856, 2688), 3) == Shard(2)

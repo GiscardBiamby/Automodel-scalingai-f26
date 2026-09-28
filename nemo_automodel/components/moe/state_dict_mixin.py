@@ -888,12 +888,16 @@ class MoESplitExpertsStateDictMixin:
                     if all_complete:
                         expert_ids = sorted(expert_weights_by_layer[layer_num][native_key].keys())
                         expert_parts = []
+                        # Unsharded per-expert shapes (after transpose), used to place the ep_shard dim.
+                        part_global_shapes = None
                         for expert_id in expert_ids:
                             expert_data = expert_weights_by_layer[layer_num][native_key][expert_id]
 
                             if is_gated:
                                 gate_weight = expert_data["gate_proj"]
                                 up_weight = expert_data["up_proj"]
+                                if part_global_shapes is None:
+                                    part_global_shapes = [tuple(w.shape[::-1]) for w in (gate_weight, up_weight)]
                                 if is_dtensor(gate_weight):
                                     gate_weight = gate_weight.to_local()
                                 if is_dtensor(up_weight):
@@ -903,12 +907,21 @@ class MoESplitExpertsStateDictMixin:
                                 expert_parts.append((gate_t, up_t))
                             else:
                                 up_weight = expert_data
+                                if part_global_shapes is None:
+                                    part_global_shapes = [tuple(up_weight.shape[::-1])]
                                 if is_dtensor(up_weight):
                                     up_weight = up_weight.to_local()
                                 expert_parts.append((up_weight.transpose(0, 1),))
 
                         merged = self._direct_fill_grouped_expert_tensor(expert_parts)
-                        state_dict[native_key] = create_dtensor_from_local(merged, device_mesh, rank)
+                        global_shape = (
+                            len(expert_ids),
+                            *part_global_shapes[0][:-1],
+                            sum(shape[-1] for shape in part_global_shapes),
+                        )
+                        state_dict[native_key] = create_dtensor_from_local(
+                            merged, device_mesh, rank, global_shape=global_shape
+                        )
                         merged_on_cuda = merged.is_cuda
 
                         # Release the per-expert sources before processing the next projection or layer so they
@@ -929,8 +942,11 @@ class MoESplitExpertsStateDictMixin:
                         expert_ids = sorted(expert_weights_by_layer[layer_num][native_key].keys())
 
                         expert_parts = []
+                        down_global_shape = None
                         for expert_id in expert_ids:
                             down_weight = expert_weights_by_layer[layer_num][native_key][expert_id]  # [dim, inter_dim]
+                            if down_global_shape is None:
+                                down_global_shape = tuple(down_weight.shape[::-1])  # unsharded [inter_dim, dim]
 
                             # Extract local tensor if input is already a DTensor
                             if is_dtensor(down_weight):
@@ -940,7 +956,9 @@ class MoESplitExpertsStateDictMixin:
                             expert_parts.append((down_t,))
 
                         merged = self._direct_fill_grouped_expert_tensor(expert_parts)
-                        state_dict[native_key] = create_dtensor_from_local(merged, device_mesh, rank)
+                        state_dict[native_key] = create_dtensor_from_local(
+                            merged, device_mesh, rank, global_shape=(len(expert_ids), *down_global_shape)
+                        )
                         merged_on_cuda = merged.is_cuda
 
                         # See gate/up branch above for the cleanup rationale.
