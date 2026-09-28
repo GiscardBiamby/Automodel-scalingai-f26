@@ -197,9 +197,11 @@ producing `[128, 5568, 896]` instead of `[128, 1856, 2688]` (`a11eba86`); (iii) 
 | 6 | DeepEP 64 SMs (default 20) | 13,759 | 26.9% | +4.7%; 12/20/32/48/64 SMs → 12.4/13.1/13.3/13.7/13.8k: at EP=2 dispatch/combine is on the critical path |
 | - | FP8 GEMMs (TE experts / TE linears) | fail | | Nemotron-V3 adapter lacks the TE-experts layout; a TE linear sees a [1, 2688] input (FP8 needs leading dims % 8) |
 
-<!-- PARTIAL_AC_RESULT -->
+| 7 | skip AC on the 6 attention blocks (new `activation_checkpointing_skip_block_types`) | 13,887 | 27.2% | +0.8% vs the mean of 5 repeat runs of step 6 (noise ≈ ±0.2%); skipping the 23 Mamba blocks OOMs |
 
-**Result:** 13,759 tokens/s/GPU and 26.9% useful MFU on 6 GPUs, **28.9× the 6-GPU baseline** and 16% more per GPU than
+![6-GPU progression](results/figures/mfu_6gpu_progression.png)
+
+**Result:** 13,887 tokens/s/GPU and 27.2% useful MFU on 6 GPUs, **29.2× the 6-GPU baseline** and 17% more per GPU than
 the 8-GPU best configuration (11,836). The profile of the adopted config (before steps 5-6) shows the GPUs 97.6%
 busy, compute kernels 83% of the step and GEMMs at ~73% of BF16 peak (counting the checkpointing recompute), so the
 remaining headroom is mostly the checkpointing recompute itself, FSDP copy kernels (12%), DeepEP (10%) and Mamba
