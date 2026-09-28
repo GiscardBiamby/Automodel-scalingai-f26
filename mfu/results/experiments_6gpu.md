@@ -31,6 +31,9 @@ Useful MFU = real tokens/s/GPU × 19.36 GFLOP / 989 TFLOP/s.
 | best6_lbs8_fullac_bf16rs | 8 packs + full AC + bf16 grad reduce-scatter | 12,872 | 25.20% | 2.47 | 52.0 GiB | +2.9%, loss identical to 3 d.p. over 30 steps; adopted |
 | best6v2_rmsnorm_te | + `backend.rms_norm: te` (was torch_fp32) | 13,136 | 25.71% | 2.42 | 52.0 GiB | +2.1%, same loss; adopted |
 | best6v2_experts_te(_fp8) | + `backend.experts: te` (TE GroupedLinear) [+ FP8 current scaling] | fail | | | | per-expert 2D weights [2688,1856] also hit the uneven-shard limit |
+| best6v3_experts_te(_fp8) | same, after the 2D dim-0 fallback fix (`def7b8de`) | fail | | | | Nemotron-V3 state-dict adapter has no TE-experts layout (missing `down_projs`) |
+| best6v3_fp8_dense | FP8 (current scaling) on TE linears only | fail | | | | a TE linear receives a [1, 2688] input (FP8 needs leading dims % 8) |
+| best6v3_deepep_sms12/32/48/64 | `backend.dispatcher_num_sms` (default 20) | 12,442 / 13,344 / 13,699 / 13,759 | 24.4 / 26.1 / 26.8 / 26.9% | | 52.0 GiB | 64 adopted (+4.7%): DeepEP is on the critical path at EP=2 |
 
 ## Profile of best6 + fused Adam + prefetch (1,172 ms/step, nsys steps 20-23)
 
