@@ -1201,7 +1201,7 @@ def parallelize_model(
     activation_checkpointing: bool | str = False,
     ignore_router_for_ac: bool = True,
     activation_checkpointing_scope: str | list[str] | tuple[str, ...] = "all",
-    activation_checkpointing_skip_block_types: tuple[str, ...] = (),
+    activation_checkpointing_skip_block_types: tuple[str, ...] | list[str] | str = (),
     reshard_after_forward: bool = False,
     lm_head_precision: str | torch.dtype | None = None,
     wrap_outer_model: bool = True,
