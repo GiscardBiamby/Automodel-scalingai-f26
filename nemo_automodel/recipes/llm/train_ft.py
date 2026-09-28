@@ -563,6 +563,10 @@ class TrainFinetuneRecipeForNextTokenPrediction(BaseRecipe):
         self.rng = StatefulRNG(seed=self.cfg.get("seed", 42), ranked=True)
         # Enable NVTX patching only when explicitly requested in config
         self.enable_nvtx = bool(self.cfg.get("nvtx", False))
+        # Optional Nsight Systems capture window over optimizer steps [start, end), meant for
+        # `nsys profile --capture-range=cudaProfilerApi`. Disabled (-1) by default.
+        self.nsys_start_step = int(self.cfg.get("profiling.nsys_start_step", -1))
+        self.nsys_end_step = int(self.cfg.get("profiling.nsys_end_step", -1))
 
         (
             self.distributed_setup,
@@ -1104,7 +1108,9 @@ class TrainFinetuneRecipeForNextTokenPrediction(BaseRecipe):
                 for batches in self.step_scheduler:
                     # If QAT delayed fake-quant is configured, enable after threshold
                     self._enable_qat_if_delayed(self.step_scheduler.step)
-                    train_log_data = self._run_train_optim_step(batches, self.max_grad_norm)
+                    self._maybe_toggle_nsys_capture(self.step_scheduler.step)
+                    with self._nvtx_range(f"train_step_{self.step_scheduler.step}"):
+                        train_log_data = self._run_train_optim_step(batches, self.max_grad_norm)
                     # Capture outside the microbatch loop and only after the
                     # eager optimizer step has completed. This leaves no
                     # pending checkpoint recomputation or GA backward work.
@@ -1177,6 +1183,21 @@ class TrainFinetuneRecipeForNextTokenPrediction(BaseRecipe):
         self._partial_cuda_graph_capture_pending = False
 
     # ------------------ helpers ------------------
+    def _nvtx_range(self, name: str):
+        """Return an NVTX range context manager when ``nvtx`` is enabled, else a no-op."""
+        return torch.cuda.nvtx.range(name) if self.enable_nvtx else nullcontext()
+
+    def _maybe_toggle_nsys_capture(self, step: int) -> None:
+        """Start/stop the CUDA profiler capture at the configured optimizer steps."""
+        if step == self.nsys_end_step:
+            torch.cuda.synchronize()
+            torch.cuda.cudart().cudaProfilerStop()
+            logger.info(f"Stopped nsys capture before step {step}")
+        if step == self.nsys_start_step:
+            torch.cuda.synchronize()
+            torch.cuda.cudart().cudaProfilerStart()
+            logger.info(f"Started nsys capture at step {step}")
+
     def _forward_backward_step(
         self,
         idx,
@@ -1444,6 +1465,10 @@ class TrainFinetuneRecipeForNextTokenPrediction(BaseRecipe):
             dtype=torch.long,
         )
         num_tokens_in_batch = self._dp_allreduce(num_tokens_in_batch).item()
+        # Total positions fed through the model, including all padding; tps above excludes tail padding.
+        num_input_positions = self._dp_allreduce(
+            torch.tensor(sum(batch["labels"].numel() for batch in batches), dtype=torch.long)
+        ).item()
 
         prepare_for_grad_accumulation(self.model_parts, pp_enabled=self.pp_enabled)
 
@@ -1451,37 +1476,40 @@ class TrainFinetuneRecipeForNextTokenPrediction(BaseRecipe):
             if i == num_batches - 1:
                 prepare_for_final_backward(self.model_parts, pp_enabled=self.pp_enabled)
 
-            self._forward_backward_step(
-                i, batch, loss_buffer=loss_buffer, num_label_tokens=num_label_tokens, num_batches=num_batches
-            )
+            with self._nvtx_range(f"fwd_bwd_mb{i}"):
+                self._forward_backward_step(
+                    i, batch, loss_buffer=loss_buffer, num_label_tokens=num_label_tokens, num_batches=num_batches
+                )
 
             if i == 0:
                 prepare_after_first_microbatch()
 
         synchronize_tp_replica_gradients(self.model_parts, self.device_mesh)
-        grad_norm = scale_grads_and_clip_grad_norm(
-            max_grad_norm,
-            self.model_parts,
-            norm_type=2.0,
-            pp_enabled=self.pp_enabled,
-            device_mesh=self.device_mesh,
-            moe_mesh=self.moe_mesh,
-            ep_axis_name="ep" if self.moe_mesh is not None and "ep" in self.moe_mesh.mesh_dim_names else None,
-            pp_axis_name="pp" if self.pp_enabled else None,
-            foreach=True,
-            num_label_tokens=num_label_tokens,
-            dp_group_size=self._get_dp_group_size(include_cp=True),
-            expert_tp_replication_factor=get_expert_tp_replication_factor(self.model_parts, self.device_mesh),
-            grad_norm_backend=self.cfg.get("clip_grad_norm.backend", "triton"),
-        )
+        with self._nvtx_range("grad_clip"):
+            grad_norm = scale_grads_and_clip_grad_norm(
+                max_grad_norm,
+                self.model_parts,
+                norm_type=2.0,
+                pp_enabled=self.pp_enabled,
+                device_mesh=self.device_mesh,
+                moe_mesh=self.moe_mesh,
+                ep_axis_name="ep" if self.moe_mesh is not None and "ep" in self.moe_mesh.mesh_dim_names else None,
+                pp_axis_name="pp" if self.pp_enabled else None,
+                foreach=True,
+                num_label_tokens=num_label_tokens,
+                dp_group_size=self._get_dp_group_size(include_cp=True),
+                expert_tp_replication_factor=get_expert_tp_replication_factor(self.model_parts, self.device_mesh),
+                grad_norm_backend=self.cfg.get("clip_grad_norm.backend", "triton"),
+            )
 
         # Note(MegatronFSDP): Need to call these functions for MegatronFSDP if not using latest api
         # self.model_parts[0].finish_grad_sync()
 
         self.checkpointer.maybe_wait_for_staging()
-        for opt in self.optimizer:
-            opt.step()
-            opt.zero_grad()
+        with self._nvtx_range("optimizer_step"):
+            for opt in self.optimizer:
+                opt.step()
+                opt.zero_grad()
 
         if hasattr(self.model_parts[0], "update_moe_gate_bias"):
             for mp in self.model_parts:
@@ -1561,7 +1589,9 @@ class TrainFinetuneRecipeForNextTokenPrediction(BaseRecipe):
             "tps_per_gpu": tps / max(self.dist_env.world_size, 1),
             "mfu": mfu,
             "num_tokens_per_step": num_tokens_in_batch,
+            "num_input_positions_per_step": num_input_positions,
             "num_label_tokens": num_label_tokens,
+            "step_time": time_delta,
         }
         if domain_label_counts is not None:
             total_domain_labels = max(int(domain_label_counts.sum().item()), 1)
