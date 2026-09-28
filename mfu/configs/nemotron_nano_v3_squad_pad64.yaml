@@ -1,0 +1,92 @@
+# Intervention A: bucket padded sequence lengths to a multiple of 64.
+#
+# Identical to nemotron_nano_v3_squad_baseline.yaml except the train collator rounds each micro-batch's
+# padded length up to a multiple of 64. Pad-to-longest gives almost every micro-batch a new length, and
+# TE's cuDNN fused attention builds a new fwd+bwd graph per new shape (~1 s, measured by
+# mfu/bench_te_attn_shapes.py); bucketing leaves ~10 distinct shapes, so graphs are built once and reused.
+
+recipe: TrainFinetuneRecipeForNextTokenPrediction
+
+step_scheduler:
+  global_batch_size: 256
+  local_batch_size: 8
+  ckpt_every_steps: 1000
+  val_every_steps: 1000
+  max_steps: 40
+
+dist_env:
+  backend: nccl
+  timeout_minutes: 10
+
+rng:
+  _target_: nemo_automodel.components.training.rng.StatefulRNG
+  seed: 1111
+  ranked: true
+
+model:
+  _target_: nemo_automodel.NeMoAutoModelForCausalLM.from_pretrained
+  pretrained_model_name_or_path: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
+  trust_remote_code: true
+
+checkpoint:
+  enabled: false
+  checkpoint_dir: mfu/runs/_unnamed  # also where training.jsonl is written; run.sh overrides it per run
+
+distributed:
+  strategy: fsdp2
+  dp_size: none
+  tp_size: 1
+  cp_size: 1
+  ep_size: 8
+  sequence_parallel: false
+  defer_fsdp_grad_sync: false
+
+loss_fn:
+  _target_: nemo_automodel.components.loss.masked_ce.MaskedCrossEntropy
+
+dataset:
+  _target_: nemo_automodel.components.datasets.llm.squad.make_squad_dataset
+  dataset_name: rajpurkar/squad
+  split: train
+
+packed_sequence:
+  packed_sequence_size: 0
+
+dataloader:
+  _target_: torchdata.stateful_dataloader.StatefulDataLoader
+  collate_fn:
+    _target_: nemo_automodel.components.datasets.utils.default_collater
+    pad_seq_len_divisible: 64
+  shuffle: True
+
+validation_dataset:
+  _target_: nemo_automodel.components.datasets.llm.squad.make_squad_dataset
+  dataset_name: rajpurkar/squad
+  split: validation
+  limit_dataset_samples: 64
+
+validation_dataloader:
+  _target_: torchdata.stateful_dataloader.StatefulDataLoader
+  collate_fn: nemo_automodel.components.datasets.utils.default_collater
+
+optimizer:
+  _target_: torch.optim.Adam
+  betas: [0.9, 0.999]
+  eps: 1e-8
+  lr: 1.0e-5
+  weight_decay: 0
+
+lr_scheduler:
+  lr_decay_style: cosine
+  min_lr: 1.0e-6
+
+mfu:
+  peak_tflops: 989  # H100 SXM dense BF16
+
+nvtx: false
+
+wandb:
+  enable: true
+  entity: scalingai-f26
+  project: nemotron-nano-v3-mfu
+  mode: online
