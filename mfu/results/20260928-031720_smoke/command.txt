@@ -1,0 +1,1 @@
+torchrun --standalone --nproc-per-node 8 -m nemo_automodel.cli.app /opt/Automodel/mfu/runs/20260928-031720_smoke/config.yaml --checkpoint.checkpoint_dir=/opt/Automodel/mfu/runs/20260928-031720_smoke --wandb.name=20260928-031720_smoke --step_scheduler.max_steps=5 

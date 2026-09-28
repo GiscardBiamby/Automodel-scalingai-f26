@@ -1,0 +1,1 @@
+torchrun --standalone --nproc-per-node 8 -m nemo_automodel.cli.app /opt/Automodel/mfu/runs/20260928-033750_pack4096/config.yaml --checkpoint.checkpoint_dir=/opt/Automodel/mfu/runs/20260928-033750_pack4096 --wandb.name=20260928-033750_pack4096 

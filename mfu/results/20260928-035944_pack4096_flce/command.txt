@@ -1,0 +1,1 @@
+torchrun --standalone --nproc-per-node 8 -m nemo_automodel.cli.app /opt/Automodel/mfu/runs/20260928-035944_pack4096_flce/config.yaml --checkpoint.checkpoint_dir=/opt/Automodel/mfu/runs/20260928-035944_pack4096_flce --wandb.name=20260928-035944_pack4096_flce --loss_fn._target_=nemo_automodel.components.loss.linear_ce.FusedLinearCrossEntropy --model.output_hidden_states=true 
