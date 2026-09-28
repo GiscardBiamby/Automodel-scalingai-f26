@@ -1202,6 +1202,7 @@ def parallelize_model(
     ignore_router_for_ac: bool = True,
     activation_checkpointing_scope: str | list[str] | tuple[str, ...] = "all",
     activation_checkpointing_skip_block_types: tuple[str, ...] | list[str] | str = (),
+    activation_checkpointing_skip_layers: tuple[int, ...] | list[int] | str = (),
     reshard_after_forward: bool = False,
     lm_head_precision: str | torch.dtype | None = None,
     wrap_outer_model: bool = True,
@@ -1281,13 +1282,21 @@ def parallelize_model(
 
     if activation_checkpointing:
         skip_types = _normalize_block_types(activation_checkpointing_skip_block_types)
-        if skip_types:
+        skip_layers = {int(v) for v in _normalize_block_types(activation_checkpointing_skip_layers)}
+        if skip_types or skip_layers:
             skipped = 0
             for module in model.modules():
-                if getattr(module, "block_type", None) in skip_types:
+                if not hasattr(module, "block_type"):
+                    continue
+                if module.block_type in skip_types or getattr(module, "layer_idx", None) in skip_layers:
                     module._nemo_disable_activation_checkpointing = True
                     skipped += 1
-            logger.info("Activation checkpointing disabled for %d block(s) of type %s", skipped, sorted(skip_types))
+            logger.info(
+                "Activation checkpointing disabled for %d block(s) (types %s, layers %s)",
+                skipped,
+                sorted(skip_types),
+                sorted(skip_layers),
+            )
         apply_ac(
             model,
             ignore_router=ignore_router_for_ac,

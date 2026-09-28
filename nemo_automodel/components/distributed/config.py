@@ -276,6 +276,8 @@ class FSDP2Config:
             attribute, e.g. ``"mamba"``, ``"attention"``, ``"moe"`` for hybrid models) to leave
             un-checkpointed when activation checkpointing is on, trading memory for less recompute.
             Currently honoured by the MoE parallelizer. Default: checkpoint every block.
+        activation_checkpointing_skip_layers (list[int]): Decoder layer indices (a block's ``layer_idx``) to leave
+            un-checkpointed, for finer control than block types. Currently honoured by the MoE parallelizer.
         defer_fsdp_grad_sync (bool): Defer FSDP gradient sync to final micro-batch.
         reshard_after_forward (Optional[bool]): Override layer-level FSDP2 resharding.
             ``None`` preserves AutoModel's heuristic: pipeline-parallel layers do
@@ -320,6 +322,7 @@ class FSDP2Config:
     activation_checkpointing: ActivationCheckpointingMode = False
     activation_checkpointing_scope: ActivationCheckpointingScope = "all"
     activation_checkpointing_skip_block_types: List[str] = field(default_factory=list)
+    activation_checkpointing_skip_layers: List[int] = field(default_factory=list)
     defer_fsdp_grad_sync: bool = True
     reshard_after_forward: bool | None = None
     enable_async_tensor_parallel: bool = False

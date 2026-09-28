@@ -444,6 +444,9 @@ def instantiate_infrastructure(
             activation_checkpointing_skip_block_types=getattr(
                 distributed_config, "activation_checkpointing_skip_block_types", ()
             ),
+            activation_checkpointing_skip_layers=getattr(
+                distributed_config, "activation_checkpointing_skip_layers", ()
+            ),
             **moe_kwargs,
         )
     elif autopipeline is not None and model_wrapper is not None:
