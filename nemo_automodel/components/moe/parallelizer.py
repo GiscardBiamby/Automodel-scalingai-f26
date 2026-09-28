@@ -778,8 +778,19 @@ def apply_fsdp(
     lm_head_precision: str | torch.dtype | None = None,
     wrap_outer_model: bool = True,
     frozen_multimodal_sharding: FrozenMultimodalSharding = "root",
+    enable_fsdp2_prefetch: bool = False,
+    fsdp2_forward_prefetch_depth: int = 1,
+    fsdp2_backward_prefetch_depth: int = 2,
 ) -> None:
-    """Apply FSDP wrapping to MoE transformer blocks and model-level modules."""
+    """Apply FSDP wrapping to MoE transformer blocks and model-level modules.
+
+    With ``enable_fsdp2_prefetch``, blocks (and their separately sharded experts) get explicit FSDP2 prefetch
+    chains in execution order, so the all-gather of the next unit is issued while the current one computes even
+    when the host does not run ahead of the GPU (implicit FSDP2 prefetch only issues it at the next unit's
+    pre-forward hook). Forward prefetch applies regardless of ``reshard_after_forward`` because parameters are
+    resharded after backward and re-gathered in every micro-batch's forward; backward prefetch only applies when
+    resharding after forward.
+    """
     frozen_multimodal_sharding = normalize_frozen_multimodal_sharding(frozen_multimodal_sharding)
     # MoE normally keeps fully frozen skipped towers with an always-run root,
     # but trainable multimodal towers still get standalone FSDP units. Install
@@ -894,6 +905,7 @@ def apply_fsdp(
     if mtp_module is not None and hasattr(mtp_module, "layers"):
         mtp_block_ids = {id(b) for b in mtp_module.layers.children()}
 
+    prefetch_units: list[nn.Module] = []  # FSDP units in forward execution order
     for block in _iter_moe_blocks(model, _model):
         moe_module = _get_moe_module(block)
         gate = getattr(moe_module, "gate", None)
@@ -951,6 +963,29 @@ def apply_fsdp(
             reshard_after_forward=reshard_after_forward,
             ignored_params=ignored_params or None,
             fully_shard_fn=fully_shard_impl,
+        )
+        if id(block) not in mtp_block_ids:
+            # FSDP2 units expose set_modules_to_forward_prefetch once fully_shard has been applied.
+            if hasattr(block, "set_modules_to_forward_prefetch"):
+                prefetch_units.append(block)
+            experts = getattr(moe_module, "experts", None) if isinstance(moe_module, MoE) else None
+            if experts is not None and hasattr(experts, "set_modules_to_forward_prefetch"):
+                prefetch_units.append(experts)
+
+    if enable_fsdp2_prefetch and len(prefetch_units) > 1:
+        for i, unit in enumerate(prefetch_units):
+            forward_targets = prefetch_units[i + 1 : i + 1 + fsdp2_forward_prefetch_depth]
+            if forward_targets:
+                unit.set_modules_to_forward_prefetch(forward_targets)
+            if reshard_after_forward:
+                backward_targets = prefetch_units[max(0, i - fsdp2_backward_prefetch_depth) : i][::-1]
+                if backward_targets:
+                    unit.set_modules_to_backward_prefetch(backward_targets)
+        logger.info(
+            "FSDP2 explicit prefetch over %d MoE-model units (forward depth %d, backward depth %s)",
+            len(prefetch_units),
+            fsdp2_forward_prefetch_depth,
+            fsdp2_backward_prefetch_depth if reshard_after_forward else "off: params kept after forward",
         )
 
     # Re-establish weight tying before detecting it: a device/dtype move during
@@ -1165,6 +1200,9 @@ def parallelize_model(
     enable_async_tensor_parallel: bool = False,
     frozen_multimodal_sharding: FrozenMultimodalSharding = "root",
     reapply_trainability: Callable[[nn.Module], None] | None = None,
+    enable_fsdp2_prefetch: bool = False,
+    fsdp2_forward_prefetch_depth: int = 1,
+    fsdp2_backward_prefetch_depth: int = 2,
 ) -> None:
     """Apply tensor, context, expert, activation-checkpointing, and FSDP parallelism.
 
@@ -1268,6 +1306,9 @@ def parallelize_model(
             lm_head_precision=lm_head_precision,
             wrap_outer_model=wrap_outer_model,
             frozen_multimodal_sharding=frozen_multimodal_sharding,
+            enable_fsdp2_prefetch=enable_fsdp2_prefetch,
+            fsdp2_forward_prefetch_depth=fsdp2_forward_prefetch_depth,
+            fsdp2_backward_prefetch_depth=fsdp2_backward_prefetch_depth,
         )
         if cp_enabled:
             configured_units = parallelizer_utils.configure_fsdp_unused_param_reduction(model)

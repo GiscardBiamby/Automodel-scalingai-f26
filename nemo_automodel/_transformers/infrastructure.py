@@ -427,6 +427,13 @@ def instantiate_infrastructure(
                 "frozen_multimodal_sharding",
                 model_wrapper.frozen_multimodal_sharding,
             )
+            moe_kwargs.setdefault("enable_fsdp2_prefetch", bool(getattr(model_wrapper, "enable_fsdp2_prefetch", False)))
+            moe_kwargs.setdefault(
+                "fsdp2_forward_prefetch_depth", getattr(model_wrapper, "fsdp2_forward_prefetch_depth", 1)
+            )
+            moe_kwargs.setdefault(
+                "fsdp2_backward_prefetch_depth", getattr(model_wrapper, "fsdp2_backward_prefetch_depth", 2)
+            )
         parallelize_fn = partial(
             parallelize_model,
             activation_checkpointing=activation_checkpointing,

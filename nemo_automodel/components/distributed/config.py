@@ -290,7 +290,7 @@ class FSDP2Config:
             Skips whole-model compile so that checkpoint loading does not produce
             ``_orig_mod`` key-prefix mismatches.
         enable_fsdp2_prefetch (bool): Enable explicit forward/backward prefetch chains
-            between FSDP2 sharded layers.  Default ``True``.
+            between FSDP2 sharded layers (dense and MoE parallelizers).  Default ``False``.
         fsdp2_backward_prefetch_depth (int): Number of FSDP units to prefetch during
             backward pass.  ``2`` hides AllGather behind compute; ``1`` reduces peak
             memory at a small throughput cost.  Default ``2``.
