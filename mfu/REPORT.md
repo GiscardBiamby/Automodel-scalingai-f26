@@ -1,5 +1,7 @@
 # Where the FLOPs go: Nemotron-3-Nano-30B-A3B full SFT on SQuAD in NeMo Automodel
 
+*(8-GPU study: §1-6; 6-GPU optimisation loop: §6b; per-experiment log: `results/experiments_6gpu.md`.)*
+
 EE 290/194 Scalable AI, Assignment 1 Part B. Stack: NeMo Automodel (`main` @ `8f73178`, fork branch
 `mfu-study`), FSDP2 + expert parallelism (EP=8), 1 node × 8× H100 80GB SXM (NVLink), host driver R550.
 All numbers are medians over steady-state steps (steps 5-39 of 40) unless noted. Raw data: `mfu/results/`.
@@ -10,8 +12,12 @@ cuDNN fused attention rebuilt its execution graph for almost every micro-batch b
 batching produces a new sequence length each time (~1 s of CPU per micro-batch, measured). Removing that
 (fixed shapes via THD packing), then the padding waste, the materialised 131k-vocab logits, and gradient
 accumulation raised throughput **10.5× to 11,836 tokens/s/GPU (23.2% useful MFU)** with an unchanged loss
-curve. The remaining gap to the upstream synthetic-data benchmark (33.6%) is dominated by DeepEP and
-FSDP communication on the critical path and per-layer CPU launch overhead.
+curve. A second profile-driven loop on 6 GPUs (the node is shared; GPUs 0-1 left to groupmates), where expert
+weights must also be FSDP-sharded, reached **13,953 tokens/s/GPU (27.3% useful MFU), 29× the 6-GPU baseline and 18%
+more per GPU than the 8-GPU best**: larger micro-batches paid for by activation checkpointing (+81%), fused Adam,
+bf16 gradient reduction, TE RMSNorm and a larger DeepEP SM budget; the final step is GPU-bound (97.5% busy) with
+GEMMs half of it. Six framework fixes/features made this possible (uneven expert sharding, checkpoint loading, MoE
+FSDP prefetch, partial activation checkpointing, shared-expert overlap, NVSHMEM-less DeepEP), all with unit tests.
 
 ![useful MFU by configuration](results/figures/mfu_by_config.png)
 
