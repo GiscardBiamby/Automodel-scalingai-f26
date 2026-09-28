@@ -70,8 +70,12 @@ Automodel's `flops_utils.nemotronh_flops` within 0.1% (checked). The recipe's ow
 | run | step (s) | tokens/s/GPU | recipe MFU | useful MFU | pad efficiency | peak mem |
 |---|---|---|---|---|---|---|
 | **Baseline** (shipped recipe on SQuAD) | 5.865 | 1,127 | 3.40% | **2.21%** | 0.643 | 60.1 GiB |
-| Upstream benchmark recipe `llm_benchmark/nemotron/nemotron_nano_v3_te_deepep.yaml` (same image) | 15.56 | 16,844 | 33.6% | 33.6% | 1.00 | 63.9 GiB |
+| Upstream benchmark recipe `llm_benchmark/nemotron/nemotron_nano_v3_te_deepep.yaml`, **NVIDIA published** (`docs/performance-summary.mdx`, container 26.02, DGX-H100) | 15.614 | 16,789 | 33.2% (328 TFLOP/s) | | 1.00 | |
+| same recipe, **reproduced on our node** with our image (15 steps, 5 warmup; run `20260928-040743_oss_ref_benchmark`) | 15.56 | 16,844 | 33.6% | 33.6% | 1.00 | 63.9 GiB |
 
+Our reproduction of NVIDIA's published benchmark matches it within 0.4% (16,844 vs 16,789 tokens/s/GPU), which also
+shows that our CUDA-12.8 image does not cost performance relative to NVIDIA's container. (NVIDIA's MFU is its
+reported 328 TFLOP/s ÷ 989; ours uses 19.72 GFLOP/token at sequence length 4096, which gives ~332 TFLOP/s.)
 The upstream benchmark is the best configuration NVIDIA ships for this model, but it is not a like-for-like
 workload: synthetic 4096-token sequences (no padding, fixed shape), `fake_balanced_gate` (perfectly balanced
 expert load), activation checkpointing, and 2.1M tokens/step with 16-way gradient accumulation (optimizer and
