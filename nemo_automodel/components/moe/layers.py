@@ -743,6 +743,19 @@ class Gate(nn.Module):
         self.apply(partial(_init_weights, buffer_device=buffer_device, init_std=init_std))
 
 
+_SHARED_EXPERT_STREAMS: dict[int, torch.cuda.Stream] = {}
+
+
+def _shared_expert_stream(device: torch.device) -> torch.cuda.Stream:
+    """Return the per-device side stream used for shared-expert overlap (created lazily, one per process)."""
+    index = device.index if device.index is not None else torch.cuda.current_device()
+    stream = _SHARED_EXPERT_STREAMS.get(index)
+    if stream is None:
+        stream = torch.cuda.Stream(device=index)
+        _SHARED_EXPERT_STREAMS[index] = stream
+    return stream
+
+
 class MoE(nn.Module):
     """
     Mixture-of-Experts (MoE) module.
@@ -898,15 +911,32 @@ class MoE(nn.Module):
             z = None
         else:
             weights, indices, aux_loss = self.gate(x, token_mask, cp_mesh)
-            # Shared-expert output (optionally gated), computed inline on the main stream.
+            # Shared-expert output (optionally gated). With backend.shared_expert_overlap it runs on a
+            # side stream, launched before the routed path and joined after it, so its GEMMs can use the
+            # SMs left free while the routed path waits on dispatch/combine communication (same idea as
+            # Megatron-Core's moe_shared_expert_overlap and the Kimi K3 implementation).
             z = None
-            if self.shared_experts is not None:
+            shared_stream = None
+            if self.shared_experts is not None and self.backend.shared_expert_overlap and x.is_cuda:
+                shared_stream = _shared_expert_stream(x.device)
+                shared_stream.wait_stream(torch.cuda.current_stream())
+                with torch.cuda.stream(shared_stream):
+                    z = self.shared_experts(x)
+                    if self.shared_expert_gate is not None:
+                        z = torch.nn.functional.sigmoid(self.shared_expert_gate(x)) * z
+                # ``x`` was allocated on the current stream; keep its block alive for the side stream.
+                x.record_stream(shared_stream)
+            elif self.shared_experts is not None:
                 z = self.shared_experts(x)
                 if self.shared_expert_gate is not None:
                     z = torch.nn.functional.sigmoid(self.shared_expert_gate(x)) * z
 
             # Routed experts on the main stream.
             y = self.experts(x_latent, token_mask, weights, indices)
+            if shared_stream is not None:
+                current = torch.cuda.current_stream()
+                current.wait_stream(shared_stream)
+                z.record_stream(current)
 
         if self.fc2_latent_proj is not None:
             # ``self.experts`` is its own FSDP unit; an ``output_dtype`` in the FSDP

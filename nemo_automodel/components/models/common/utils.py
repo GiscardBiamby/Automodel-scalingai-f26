@@ -533,7 +533,7 @@ class BackendConfig:
     # same lazy once-per-process pattern as compile_situ. Numerics are allclose to eager,
     # not bitwise-identical. Default False.
     compile_norm: bool = False
-    # When True, models that opt in (currently Kimi K3) run their shared experts on a side CUDA
+    # When True, models that opt in (Kimi K3 and models using the generic MoE layer) run their shared experts on a side CUDA
     # stream, launched before the routed-expert path and joined after it, so the shared-expert
     # GEMMs overlap the expert-parallel dispatch / combine communication (Megatron-Core's
     # moe_shared_expert_overlap). Same math, only the execution order changes. Default False.
