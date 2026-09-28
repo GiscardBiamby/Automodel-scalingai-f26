@@ -22,6 +22,11 @@ Batch size / activation checkpointing (base = e8_r2 + DeepEP 96 SMs + FP8 dense 
 | e8_b2_lbs4 | 4 packs/GPU, no AC | OOM | | | | |
 | e8_b3_lbs4_ac | 4 packs + full AC | 12,698 | 24.9% | 1.255 | 37.9 GiB | −11.8% |
 | e8_b4_lbs8_ac | 8 packs + full AC | 13,427 | 26.3% | 2.370 | 47.8 GiB | −6.7% |
+| e8_b5_lbs3 | 3 packs/GPU, no AC (GBS 24) | **15,172** | **29.7%** | 0.788 | 70.5 GiB | **+5.4%, adopted** |
+| e8_b6_lbs4_acmoe | 4 packs + AC on the 23 MoE blocks only | 13,554 | 26.5% | 1.174 | 51.7 GiB | −5.8% |
 
 Opposite of 6 GPUs: at EP=8 there is no per-micro-batch expert all-gather to amortise, so the checkpointing
-recompute is pure overhead.
+recompute is pure overhead; the best batch is the largest that fits *without* AC (3 packs).
+
+Adopted in `configs/nemotron_nano_v3_squad_best.yaml`: e8_b5 = 15,172 tok/s/GPU, 29.7% useful MFU (13.5× the
+shipped recipe, +28% over round-1 config E).

@@ -15,7 +15,8 @@ params) and for profiling where time goes. Target: 1 node, 8x H100 80GB SXM.
 | `run.sh` | One run end-to-end: GPU-busy guard, run dir + provenance, torchrun (optionally under `nsys`), summary |
 | `summarize.py` | Steady-state table from `training.jsonl`: step time, tokens/s/GPU, MFU, padding efficiency, memory |
 | `analyze_nsys.py` | GPU time budget from an nsys capture: busy/idle, compute vs comm, exposed comm, per-category kernel time, top kernels, NVTX phases |
-| `configs/nemotron_nano_v3_squad_{pad64,pack4096,best}.yaml` | Interventions A, B and the best combined config (E); see `REPORT.md` |
+| `configs/nemotron_nano_v3_squad_{pad64,pack4096,best}.yaml` | Interventions A, B and the best 8-GPU config (round 2); see `REPORT.md` |
+| `results/experiments_8gpu_round2.md` | 8-GPU round-2 ladder (6-GPU findings re-tested on 8 GPUs) |
 | `configs/nemotron_nano_v3_squad_best_6gpu.yaml` | Best config on 6 GPUs (EP=2, 8 packs, full AC except attention, bf16 reduce, TE norm, 64 DeepEP SMs) |
 | `bench_nccl.py` | NCCL all-gather / reduce-scatter bus bandwidth at FSDP message sizes |
 | `results/experiments_6gpu.md` | Every 6-GPU experiment with its result and verdict |
@@ -62,7 +63,7 @@ mfu/run.sh --name baseline                      # 40 steps, metrics -> mfu/runs/
 mfu/run.sh --name baseline_nsys --profile nsys --steps 14 --nsys-steps 10:13
 mfu/docker.sh -- python mfu/analyze_nsys.py mfu/runs/<ts>_baseline_nsys   # GPU-side breakdown (+ exports profile.sqlite)
 python3 mfu/analyze_cpu.py mfu/runs/<ts>_baseline_nsys                   # host-side breakdown
-mfu/run.sh --name best -c mfu/configs/nemotron_nano_v3_squad_best.yaml  # best config (10.5x)
+mfu/run.sh --name best -c mfu/configs/nemotron_nano_v3_squad_best.yaml  # 8-GPU best (15.2k tok/s/GPU, 13.5x)
 mfu/run.sh --name best6 -c mfu/configs/nemotron_nano_v3_squad_best_6gpu.yaml --devices 2,3,4,5,6,7  # 6-GPU best (13.9k tok/s/GPU)
 MFU_GPUS=none mfu/docker.sh -- python -m pytest -q tests/unit_tests/moe   # CPU-only unit tests (no GPU touched)
 python3 mfu/summarize.py mfu/runs/<ts>_baseline mfu/runs/<ts>_other   # compare runs

@@ -1,6 +1,7 @@
 # Where the FLOPs go: Nemotron-3-Nano-30B-A3B full SFT on SQuAD in NeMo Automodel
 
-*(8-GPU study: §1-6; 6-GPU optimisation loop: §6b; per-experiment log: `results/experiments_6gpu.md`.)*
+*(8-GPU study: §1-6; 6-GPU optimisation loop: §6b; 8-GPU round 2: §6c; per-experiment logs: `results/experiments_6gpu.md`,
+`results/experiments_8gpu_round2.md`.)*
 
 EE 290/194 Scalable AI, Assignment 1 Part B. Stack: NeMo Automodel (`main` @ `8f73178`, fork branch
 `mfu-study`), FSDP2 + expert parallelism (EP=8), 1 node × 8× H100 80GB SXM (NVLink), host driver R550.
@@ -16,7 +17,10 @@ curve. A second profile-driven loop on 6 GPUs (the node is shared; GPUs 0-1 left
 weights must also be FSDP-sharded, reached **14,326 tokens/s/GPU (28.0% useful MFU), 30× the 6-GPU baseline and 21%
 more per GPU than the 8-GPU best**: larger micro-batches paid for by activation checkpointing (+81%), fused Adam,
 bf16 gradient reduction, TE RMSNorm, a larger DeepEP SM budget and FP8 dense linears; the final step is GPU-bound (97.5% busy) with
-GEMMs half of it. Six framework fixes/features made this possible (uneven expert sharding, checkpoint loading, MoE
+GEMMs half of it. Re-testing those changes on all 8 GPUs (round 2) gave the final result, **15,172 tokens/s/GPU
+(29.7% useful MFU; 15,347 / 30.0% over 100 steps), 13.5× the shipped recipe** and 90% of NVIDIA's synthetic-data
+benchmark, while showing that the 6-GPU winner (bigger micro-batch + activation checkpointing) *loses* at EP=8,
+where there is no per-micro-batch expert all-gather to amortise. Six framework fixes/features made this possible (uneven expert sharding, checkpoint loading, MoE
 FSDP prefetch, partial activation checkpointing, shared-expert overlap, NVSHMEM-less DeepEP), all with unit tests.
 
 ![useful MFU by configuration](results/figures/mfu_by_config.png)
@@ -105,11 +109,16 @@ backward), on every rank (`cpu_breakdown.md`). During those windows no kernels r
 ranks finish them at slightly different times, so the next FSDP all-gather / reduce-scatter absorbs the skew as
 wait time, which is why NCCL kernel time looks large.
 
-> **TODO (Nsight screenshots, required by the rubric):** open the two `.nsys-rep` files in the Nsight Systems GUI and
-> capture (1) baseline, one `train_step_11` on rank 0 with the NVTX row expanded to `fused_attention: FusedAttention`
-> (the ~0.5 s ranges) and the CUDA HW row empty underneath; (2) the packed run, one `train_step_25` showing dense
-> GEMM rows and the DeepEP / NCCL kernels interleaved on the compute stream. The PNG timelines above are rendered
+> **TODO (Nsight screenshots, required by the rubric).** Open these traces in the Nsight Systems GUI
+> (`mfu/runs/`, git-ignored; ~60 MB each) and capture the views below. The PNG timelines in this report are rendered
 > from the same traces and can stand in until then.
+>
+> | trace | screenshot |
+> |---|---|
+> | `20260928-032656_baseline_nsys/profile.nsys-rep` | rank 0, `train_step_11`: NVTX row expanded to `fused_attention: FusedAttention` (the ~0.5 s ranges) with the empty CUDA HW rows underneath |
+> | `20260928-034228_pack4096_nsys/profile.nsys-rep` | rank 0, `train_step_25`: dense GEMM rows with DeepEP / NCCL kernels interleaved on the compute stream |
+> | `20260928-172950_final8_nsys/profile.nsys-rep` | final 8-GPU config, one `train_step_*`: DeepEP dispatch/combine (largest non-GEMM cost) between MoE GEMMs |
+> | `20260928-115423_final6_nsys/profile.nsys-rep` | final 6-GPU config: all-gather/reduce-scatter of expert weights overlapping compute (explicit prefetch) |
 
 ## 4. Diagnosis: hypotheses and evidence
 
@@ -154,7 +163,7 @@ the loss (4 GiB per 8k tokens); 2 packs per GPU OOMs at exactly that 4 GiB alloc
 | B: THD packing | 0.860 | 9,232 (8.2×) | 18.07% | 19.00% | 0.971 | 54.9 GiB | 5.109 → 0.256 |
 | C: B + fused linear-CE | 0.826 | 9,598 (8.5×) | 18.79% | 19.77% | 0.971 | 49.0 GiB | 5.111 → 0.259 |
 | **D: C + 2 packs/GPU** | **0.676** | **11,757 (10.4×)** | **23.02%** | 24.18% | 0.971 | 55.7 GiB | 5.110 → 0.259 |
-| **E: D + `gc_every_steps: 50`** (`configs/nemotron_nano_v3_squad_best.yaml`) | **0.672** (mean 0.763) | **11,836 (10.5×)** | **23.17%** | 24.32% | 0.971 | 56.8 GiB | 5.110 → 0.259 |
+| **E: D + `gc_every_steps: 50`** (`configs/nemotron_nano_v3_squad_pack4096.yaml` + overrides, see the header of `configs/nemotron_nano_v3_squad_best.yaml`) | **0.672** (mean 0.763) | **11,836 (10.5×)** | **23.17%** | 24.32% | 0.971 | 56.8 GiB | 5.110 → 0.259 |
 | B + 2 packs/GPU without C | OOM (4 GiB logits allocation) | | | | | | |
 
 * A alone confirms H1 in the full model: identical math (loss 5.244 → 0.290 vs 5.243 → 0.289), 2.9× faster, even
@@ -222,6 +231,40 @@ micro-batch size because weight traffic is paid per micro-batch and gradient acc
 
 ![final 6-GPU timeline](results/figures/timeline_final6.png)
 
+## 6c. Round 2 on all 8 GPUs: which 6-GPU findings transfer
+
+When all 8 GPUs were free again, the 6-GPU changes were re-tested one at a time on top of 8-GPU config E
+(`results/experiments_8gpu_round2.md`). At EP=8 the experts are *not* FSDP-sharded, so the per-micro-batch expert
+all-gathers that dominated on 6 GPUs do not exist, and round 1 had shown DeepEP (~22%) and host overhead as the
+largest losses.
+
+| step | change (cumulative) | tok/s/GPU | useful MFU | Δ | why it did / did not transfer |
+|---|---|---|---|---|---|
+| E | round-1 best: packing, fused CE, 2 packs/GPU, GC | 11,836 | 23.2% | | |
+| 1 | fused Adam | 12,425 | 24.3% | +5.0% | optimizer is a larger share of the short 8-GPU step |
+| 2 | bf16 gradient reduce-scatter | 12,666 | 24.8% | +1.9% | smaller than on 6 GPUs: only non-expert grads are reduced over FSDP |
+| 3 | TE RMSNorm | 12,852 | 25.2% | +1.5% | |
+| 4 | DeepEP 96 SMs (default 20) | 14,318 | 28.0% | **+11.4%** | DeepEP dispatch/combine was ~22% of the step at EP=8 and sits on the critical path |
+| 5 | FP8 dense linears | 14,395 | 28.2% | +0.5% | GEMMs are a smaller share at 8 GPUs, so FP8 barely helps |
+| 6 | 3 packs/GPU, no AC (GBS 24) | **15,172** | **29.7%** | +5.4% | more tokens per per-layer host/launch cost; largest batch that fits without AC |
+| ✗ | 4 packs + full AC / 8 packs + full AC / 4 packs + AC on MoE only | 12,698 / 13,427 / 13,554 | | −12 / −7 / −6% | no expert all-gather to amortise at EP=8, so recompute is pure cost (the 6-GPU winner does not transfer) |
+
+The key contrast: **the same change (bigger micro-batch paid for by activation checkpointing) is +81% on 6 GPUs
+and −7…−12% on 8 GPUs**, and the profiles explain why. On 6 GPUs the step was dominated by expert-weight
+all-gathers whose cost is per micro-batch; on 8 GPUs that term is absent. The final 8-GPU config
+(`configs/nemotron_nano_v3_squad_best.yaml`) reaches **15,172 tokens/s/GPU, 29.7% useful MFU: 13.5× the shipped
+recipe and 90% of the upstream synthetic-data benchmark (33.6%)**, on real SQuAD data with real routing.
+
+![8-GPU round 2](results/figures/mfu_8gpu_round2.png)
+
+**Profile of the final 8-GPU config** (`runs/*_final8_nsys`, 784 ms/step, steps 20-22): GPUs 94.8% busy (idle 5.2%,
+was 61% in the baseline), compute kernels 71.4%, communication 30.1% of which **23.4% is exposed**. GEMMs are 38%
+of the step; **DeepEP dispatch/combine is the largest non-GEMM cost at 161 ms (20.6%)** even with 96 SMs, then Mamba
+kernels 9%, FSDP all-gather + reduce-scatter 13% (partly overlapped), elementwise 7%. A 100-step run of the config
+file alone gives 15,347 tok/s/GPU median (30.0% useful MFU), loss 5.15 → 0.055 without instability.
+
+![final 8-GPU timeline](results/figures/timeline_final8.png)
+
 ## 7. Recommendations: what to optimise next (ranked by evidence × expected gain)
 
 Status after both loops: ✅ done and measured, ❌ tried and rejected/blocked, ▶ open.
@@ -231,9 +274,12 @@ Status after both loops: ✅ done and measured, ❌ tried and rejected/blocked, 
    useful MFU on 8 GPUs). Upstream PR candidate: a `nemotron_nano_v3_squad.yaml` with packing, plus a warning when TE
    fused attention sees many distinct shapes.
 2. ✅ **More tokens per micro-batch, paid for with memory tricks**: fused linear-CE (no 131k-vocab logits), no gradient
-   accumulation, and on 6 GPUs 8 packs/GPU with full activation checkpointing (+81%). This is the single largest lever
+   accumulation, 3 packs/GPU on 8 GPUs (+5.4%, no AC), and on 6 GPUs 8 packs/GPU with full activation checkpointing
+   (+81%). Whether AC pays off depends on whether a per-micro-batch cost exists to amortise (−7…−12% at EP=8). This is the single largest lever
    once shapes are fixed, because per-micro-batch costs (FSDP expert all-gathers, per-layer host work) are amortised.
-3. ✅ **DeepEP tuning**: 64 SMs instead of 20 (+4.7% at EP=2). ❌ `dispatcher_async_dispatch` (−5.7%): without work
+3. ✅ **DeepEP tuning**: 96 SMs instead of 20 (+6.2% at EP=2, +11.4% at EP=8). ▶ Still the largest non-GEMM cost at
+   EP=8 (20.6% of the final step): HybridEP or the MoK fused dispatch+GEMM+combine kernel (lecture 7: +13.6% over
+   HybridEP) are the next candidates, as is bounded-capacity dispatch to remove DeepEP's host-side notify sync. ❌ `dispatcher_async_dispatch` (−5.7%): without work
    to overlap, async only adds synchronisation. ▶ Next: overlap the shared-expert MLP with dispatch/combine on a side
    stream (Automodel's `shared_expert_overlap` exists for Kimi K3 only; lecture 7 found it roughly neutral there).
 4. ✅ **FSDP traffic**: bf16 gradient reduce-scatter (+2.9%, identical loss over 30 steps; lecture caveat for very long
@@ -263,6 +309,9 @@ Recommendation: set `gc_every_steps` (or `gc.freeze()` after dataset constructio
 
 * Seeds: `rng.seed 1111` (ranked), shuffled SQuAD; data order is deterministic across runs, which let the
   profiled window be chosen to exclude known spike steps.
+* The final 8-GPU config file (`configs/nemotron_nano_v3_squad_best.yaml`) reproduces without overrides over 100
+  steps: 15,347 tok/s/GPU median (vs 15,172 in the 30-step ablation; longer runs amortise first-step graph builds),
+  mean step 0.81 s vs median 0.78 s, loss 5.15 → 0.055, grad norm 0.82, peak memory 70.5 GiB.
 * The final 6-GPU config file reproduces without overrides over 100 steps: 13,946 tok/s/GPU median (vs 13,953
   in the 30-step ablation), mean step 2.30 s vs median 2.28 s, loss 5.35 → 0.05 with no instability under bf16
   gradient reduction (100 steps ≈ one SQuAD epoch at 190k tokens/step, so this cannot rule out long-horizon effects).

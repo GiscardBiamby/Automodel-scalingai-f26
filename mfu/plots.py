@@ -255,15 +255,60 @@ def fig_6gpu() -> None:
     plt.close(fig)
 
 
+RUNS_8GPU_R2 = [
+    ("round-1\nbest (E)", "_pack4096_flce_lbs2_gc"),
+    ("+ fused\nAdam", "_e8_r0_best"),
+    ("+ bf16\ngrad RS", "_e8_r1_bf16rs"),
+    ("+ TE\nRMSNorm", "_e8_r2_rmsnorm"),
+    ("+ DeepEP\n96 SMs", "_e8_r3b_sms96"),
+    ("+ FP8 dense\nlinears", "_e8_b1_base"),
+    ("+ 3 packs\n/GPU", "_e8_b5_lbs3"),
+]
+
+
+def fig_8gpu_round2() -> None:
+    labels, useful, tps = [], [], []
+    for label, suf in RUNS_8GPU_R2:
+        d = run_dir(suf)
+        if d is None:
+            continue
+        med = statistics.median(r["tps_per_gpu"] for r in steps(d)[5:])
+        labels.append(label)
+        tps.append(med)
+        useful.append(100 * med * FLOPS_PER_TOKEN / PEAK)
+    fig, ax = plt.subplots(figsize=(8.5, 3.8))
+    bars = ax.bar(labels, useful, color=SERIES[0], width=0.6, edgecolor=SURFACE, linewidth=2)
+    for b, u, t in zip(bars, useful, tps):
+        ax.text(b.get_x() + b.get_width() / 2, u + 0.5, f"{u:.1f}%\n{t / 1000:.1f}k", ha="center", va="bottom",
+                fontsize=8, color=INK)
+    ref = run_dir("_oss_ref_benchmark")
+    if ref is not None:
+        r = statistics.median(x["tps_per_gpu"] for x in steps(ref)[5:])
+        ref_mfu = 100 * r * 19.72e9 / PEAK
+        ax.axhline(ref_mfu, color=INK2, linestyle="--", linewidth=1.2)
+        ax.text(0, ref_mfu + 0.5, f"upstream synthetic benchmark: {ref_mfu:.1f}%", ha="left", va="bottom", fontsize=8,
+                color=INK2)
+    ax.set_ylabel("useful MFU (%)")
+    ax.set_ylim(0, 40)
+    ax.grid(axis="x", visible=False)
+    ax.tick_params(axis="x", labelsize=8)
+    ax.set_title("8 GPUs, round 2: useful MFU as changes accumulate (labels: MFU, tokens/s/GPU)", loc="left", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(OUT / "mfu_8gpu_round2.png", dpi=180)
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
     fig_mfu()
     fig_budget()
     fig_step_times()
     fig_6gpu()
+    fig_8gpu_round2()
     fig_timeline("_baseline_nsys", "Baseline: one step on GPU 0 (4 micro-batches); red = TE/cuDNN attention graph builds",
                  "timeline_baseline.png")
     fig_timeline("_pack4096_nsys", "THD packing: one training step on GPU 0 (2 micro-batches)", "timeline_pack4096.png")
+    fig_timeline("_final8_nsys", "Final 8-GPU config: one step on GPU 0 (3 packs, no AC)", "timeline_final8.png")
     fig_timeline("_final6_nsys", "Final 6-GPU config: one step on GPU 0 (8 packs, full AC except attention)",
                  "timeline_final6.png")
     print("wrote", sorted(p.name for p in OUT.glob("*.png")))
