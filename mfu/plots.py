@@ -226,6 +226,7 @@ RUNS_6GPU = [  # (label, run-dir suffix): each row adds one change to the previo
     ("+ DeepEP\n64 SMs", "_best6v3_deepep_sms64"),
     ("+ no AC on\nattention", "_best6v6_noac_attn"),
     ("+ DeepEP\n96 SMs", "_best6v9_sms96"),
+    ("+ FP8 dense\nlinears", "_best6v10_fp8_dense"),
 ]
 
 

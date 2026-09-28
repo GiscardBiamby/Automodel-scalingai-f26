@@ -13,9 +13,9 @@ batching produces a new sequence length each time (~1 s of CPU per micro-batch, 
 (fixed shapes via THD packing), then the padding waste, the materialised 131k-vocab logits, and gradient
 accumulation raised throughput **10.5× to 11,836 tokens/s/GPU (23.2% useful MFU)** with an unchanged loss
 curve. A second profile-driven loop on 6 GPUs (the node is shared; GPUs 0-1 left to groupmates), where expert
-weights must also be FSDP-sharded, reached **13,953 tokens/s/GPU (27.3% useful MFU), 29× the 6-GPU baseline and 18%
+weights must also be FSDP-sharded, reached **14,326 tokens/s/GPU (28.0% useful MFU), 30× the 6-GPU baseline and 21%
 more per GPU than the 8-GPU best**: larger micro-batches paid for by activation checkpointing (+81%), fused Adam,
-bf16 gradient reduction, TE RMSNorm and a larger DeepEP SM budget; the final step is GPU-bound (97.5% busy) with
+bf16 gradient reduction, TE RMSNorm, a larger DeepEP SM budget and FP8 dense linears; the final step is GPU-bound (97.5% busy) with
 GEMMs half of it. Six framework fixes/features made this possible (uneven expert sharding, checkpoint loading, MoE
 FSDP prefetch, partial activation checkpointing, shared-expert overlap, NVSHMEM-less DeepEP), all with unit tests.
 
@@ -201,16 +201,18 @@ producing `[128, 5568, 896]` instead of `[128, 1856, 2688]` (`a11eba86`); (iii) 
 | 4 | bf16 gradient reduce-scatter | 12,872 | 25.2% | +2.9%; loss and grad norm identical to 3 d.p. over 30 steps (lecture caveat on very long runs noted) |
 | 5 | TE RMSNorm (was torch fp32) | 13,136 | 25.7% | +2.1%, same loss |
 | 6 | DeepEP 64 SMs (default 20) | 13,759 | 26.9% | +4.7%; 12/20/32/48/64 SMs → 12.4/13.1/13.3/13.7/13.8k: at EP=2 dispatch/combine is on the critical path |
-| - | FP8 GEMMs (TE experts / TE linears) | fail | | Nemotron-V3 adapter lacks the TE-experts layout; a TE linear sees a [1, 2688] input (FP8 needs leading dims % 8) |
+| - | FP8 GEMMs: TE experts | fail | | Nemotron-V3 adapter lacks the TE-experts (GroupedLinear) layout |
+| - | FP8 GEMMs: TE linears | fail → fixed (step 9) | | the TE LM head saw a [1, 2688] input (FP8 needs leading dims % 8); fixed by running the LM head outside FP8 |
 
 | 7 | skip AC on the 6 attention blocks (new `activation_checkpointing_skip_block_types`) | 13,887 | 27.2% | +0.8% vs the mean of 5 repeat runs of step 6 (noise ≈ ±0.2%); skipping the 23 Mamba blocks OOMs |
 | - | shared-expert side-stream overlap (ported to the generic MoE) | 13,702 | | −1.3% (−3.6% with 32 DeepEP SMs): competes with DeepEP for SMs; rejected |
 | - | also skip AC on 8 of 23 Mamba layers (`activation_checkpointing_skip_layers`) | 13,069 | | −5.9% at 63.9 GiB (likely allocator pressure); rejected |
-| 8 | DeepEP 96 SMs | **13,953** | **27.3%** | +0.5% vs 64 SMs; final |
+| 8 | DeepEP 96 SMs | 13,953 | 27.3% | +0.5% vs 64 SMs |
+| 9 | FP8 (current scaling) on the dense TE linears; LM head kept high-precision (framework fix) | **14,326** | **28.0%** | +2.7%; loss tracks BF16 (0.772 vs 0.777 at step 29); expert GEMMs stay BF16 |
 
 ![6-GPU progression](results/figures/mfu_6gpu_progression.png)
 
-**Result:** 13,953 tokens/s/GPU and 27.3% useful MFU on 6 GPUs, **29.3× the 6-GPU baseline** and 18% more per GPU than
+**Result:** 14,326 tokens/s/GPU and 28.0% useful MFU on 6 GPUs, **30.1× the 6-GPU baseline** and 21% more per GPU than
 the 8-GPU best configuration (11,836). Profile of the final config (`runs/*_final6_nsys`, 2,283 ms/step): GPUs 97.5%
 busy, compute kernels 87.9% of the step, communication 21.4% of which only 9.6% is exposed (was 29%); GEMMs are half
 the step (49.5%) at ~73% of BF16 peak counting the checkpointing recompute. What remains: GEMM recompute from full AC,
@@ -237,9 +239,9 @@ Status after both loops: ✅ done and measured, ❌ tried and rejected/blocked, 
 4. ✅ **FSDP traffic**: bf16 gradient reduce-scatter (+2.9%, identical loss over 30 steps; lecture caveat for very long
    runs), explicit MoE prefetch implemented (overlap 3.7% → 23%). ▶ Next: FSDP2 copy-in/out kernels are still ~12% of
    the step; a persistent-buffer FSDP (Megatron-FSDP) would remove them but is not wired up for EP models.
-5. ✅ **Kernel choices**: fused Adam (+3.4%), TE RMSNorm (+2.1%). ❌ FP8: blocked by the Nemotron-V3 adapter (no TE
-   GroupedLinear layout for experts) and one TE linear seeing a `[1, 2688]` input; with GEMMs already at ~73% of BF16
-   peak, FP8 on the expert GEMMs (~22% of the step) is the largest remaining compute lever (≤ ~10%).
+5. ✅ **Kernel choices**: fused Adam (+3.4%), TE RMSNorm (+2.1%), FP8 on dense TE linears (+2.7%, LM head kept
+   high-precision). ▶ FP8 on the expert GEMMs (~22% of the step) needs TE-GroupedLinear support in the Nemotron-V3
+   state-dict adapter; it is the largest remaining compute lever (≤ ~10%).
 6. ✅ **Host-side hygiene**: control Python GC (`gc_every_steps`, −9% mean step time on 8 GPUs). ▶ CUDA graphs for the
    Mamba mixer / MoE router matter again whenever the configuration is host-bound (e.g. 8 GPUs at small micro-batch).
 7. ▶ **Checkpointing recompute** (~⅓ extra forward) is the largest remaining non-communication overhead on 6 GPUs; the

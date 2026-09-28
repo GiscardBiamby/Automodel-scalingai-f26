@@ -2,8 +2,8 @@
 #   mfu/run.sh -c mfu/configs/nemotron_nano_v3_squad_best_6gpu.yaml --devices 2,3,4,5,6,7
 # Differences from nemotron_nano_v3_squad_best.yaml (8 GPUs): ep_size 8 -> 2 (6 is not a divisor of 128 experts),
 # reshard_after_forward true (experts are now FSDP-sharded 3 ways), full activation checkpointing and 8 packs/GPU
-# (global batch 48 packs), bf16 gradient reduction, TE RMSNorm, 96 DeepEP SMs, no AC on attention blocks,
-# FP8 dense linears. Measured: 14,326 tok/s/GPU, 28.0% useful MFU
+# (global batch 48 packs), bf16 gradient reduction, TE RMSNorm, 96 DeepEP SMs, no AC on attention blocks.
+# Measured: 13,953 tok/s/GPU, 27.3% useful MFU
 # (mfu/results/experiments_6gpu.md).
 
 recipe: TrainFinetuneRecipeForNextTokenPrediction
@@ -34,9 +34,6 @@ model:
     _target_: nemo_automodel.components.models.common.BackendConfig
     rms_norm: te
     dispatcher_num_sms: 96   # DeepEP SMs (default 20): 12/20/32/48/64/96 -> 12.4k/13.1k/13.3k/13.7k/13.8k/14.0k tok/s
-    te_fp8:   # FP8 (per-tensor current scaling) for TE linears only; experts stay BF16 (torch_mm), LM head stays high
-      _target_: nemo_automodel.components.models.common.utils.TEFp8Config   # precision. +2.7% tok/s; loss tracks BF16.
-      recipe: current
 
 checkpoint:
   enabled: false
