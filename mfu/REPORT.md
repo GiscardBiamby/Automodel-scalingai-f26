@@ -249,6 +249,24 @@ largest losses.
 | 6 | 3 packs/GPU, no AC (GBS 24) | **15,172** | **29.7%** | +5.4% | more tokens per per-layer host/launch cost; largest batch that fits without AC |
 | ✗ | 4 packs + full AC / 8 packs + full AC / 4 packs + AC on MoE only | 12,698 / 13,427 / 13,554 | | −12 / −7 / −6% | no expert all-gather to amortise at EP=8, so recompute is pure cost (the 6-GPU winner does not transfer) |
 
+**End-to-end on 8 GPUs** (each row adds one change to the row above; rows 0-5 are 40-step runs, rows 6-11 30-step
+runs; medians of steady-state steps):
+
+| # | change | tok/s/GPU | useful MFU | Δ vs row above | vs baseline |
+|---|---|---|---|---|---|
+| 0 | **shipped recipe (baseline)** | **1,127** | **2.2%** | | 1.0× |
+| 1 | pad to a multiple of 64 (fixed shapes, no cuDNN re-planning) | 3,295 | 6.4% | +192% | 2.9× |
+| 2 | THD packing into 4,096-token rows (replaces 1) | 9,232 | 18.1% | +180% | 8.2× |
+| 3 | fused linear + cross-entropy loss | 9,598 | 18.8% | +4.0% | 8.5× |
+| 4 | 2 packs/GPU, no gradient accumulation | 11,757 | 23.0% | +22.5% | 10.4× |
+| 5 | Python GC control (= round-1 config E) | 11,836 | 23.2% | +0.7% | 10.5× |
+| 6 | fused Adam | 12,425 | 24.3% | +5.0% | 11.0× |
+| 7 | bf16 gradient reduction | 12,666 | 24.8% | +1.9% | 11.2× |
+| 8 | TE RMSNorm | 12,852 | 25.2% | +1.5% | 11.4× |
+| 9 | DeepEP on 96 SMs instead of 20 | 14,318 | 28.0% | +11.4% | 12.7× |
+| 10 | FP8 on TE linears (attention + shared experts only) | 14,395 | 28.2% | +0.5% | 12.8× |
+| 11 | 3 packs/GPU (was 2) | **15,172** | **29.7%** | +5.4% | **13.5×** |
+
 **Why FP8 barely helps here (measured in the final 8-GPU trace).** TE FP8 only applies to TE linear modules, which in
 Nemotron-V3 are the attention projections and the shared experts (~18% of matmul FLOPs). The routed experts (43%,
 `torch._grouped_mm`) and the Mamba projections (28%: `in_proj` is a plain `nn.Linear`, `out_proj` is fused into the
