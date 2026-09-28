@@ -1254,6 +1254,23 @@ def _restore_fp32_buffers(model: nn.Module, fp32_keywords: list[str]) -> None:
             module._buffers[buffer_name] = buf.to(torch.float32)
 
 
+def _lm_head_precision_context():
+    """Run the LM head outside Transformer Engine FP8 autocast.
+
+    The output layer is kept in high precision (standard FP8 practice), and it may see inputs FP8 GEMMs cannot
+    take, e.g. a single position (``[1, hidden]``) when only the last logits are kept for a fused loss.
+    """
+    if not HAVE_TE:
+        return nullcontext()
+    from transformer_engine.pytorch.fp8 import FP8GlobalStateManager
+
+    if not FP8GlobalStateManager.is_fp8_enabled():
+        return nullcontext()
+    import transformer_engine.pytorch as te
+
+    return te.fp8_autocast(enabled=False)
+
+
 def compute_lm_head_logits(
     lm_head: nn.Module | None,
     hidden_states: torch.Tensor,
@@ -1330,7 +1347,8 @@ def compute_lm_head_logits(
             else:
                 sliced = hidden_states[:, slice_indices, :]
         if fp32_lm_head:
-            logits = lm_head(sliced.float()).to(hidden_states.dtype)
+            with _lm_head_precision_context():
+                logits = lm_head(sliced.float()).to(hidden_states.dtype)
         else:
             compute_dtype = None
             if isinstance(lm_head, FSDPModule):
@@ -1339,7 +1357,8 @@ def compute_lm_head_logits(
             if compute_dtype is None and isinstance(lm_head_weight, torch.Tensor):
                 compute_dtype = lm_head_weight.dtype
             projection_input = sliced.to(compute_dtype) if compute_dtype is not None else sliced
-            logits = lm_head(projection_input)
+            with _lm_head_precision_context():
+                logits = lm_head(projection_input)
     if is_thd and logits.dim() == 2:
         logits = logits.unsqueeze(0)
 
