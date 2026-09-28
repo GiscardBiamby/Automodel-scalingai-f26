@@ -258,6 +258,9 @@ Recommendation: set `gc_every_steps` (or `gc.freeze()` after dataset constructio
 
 * Seeds: `rng.seed 1111` (ranked), shuffled SQuAD; data order is deterministic across runs, which let the
   profiled window be chosen to exclude known spike steps.
+* The final 6-GPU config file reproduces without overrides over 100 steps: 13,946 tok/s/GPU median (vs 13,953
+  in the 30-step ablation), mean step 2.30 s vs median 2.28 s, loss 5.35 → 0.05 with no instability under bf16
+  gradient reduction (100 steps ≈ one SQuAD epoch at 190k tokens/step, so this cannot rule out long-horizon effects).
 * Every run directory records the exact command, resolved config, git commit + diff, image and `nvidia-smi`
   (`mfu/runs/<ts>_<name>/`); small artefacts are copied to `mfu/results/`.
 * 40 steps per configuration; statistics exclude steps 0-4 (startup, first graph builds). Longer runs would lower

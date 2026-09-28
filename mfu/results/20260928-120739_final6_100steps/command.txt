@@ -1,0 +1,1 @@
+torchrun --standalone --nproc-per-node 6 -m nemo_automodel.cli.app /opt/Automodel/mfu/runs/20260928-120739_final6_100steps/config.yaml --checkpoint.checkpoint_dir=/opt/Automodel/mfu/runs/20260928-120739_final6_100steps --wandb.name=20260928-120739_final6_100steps --step_scheduler.max_steps=100 
