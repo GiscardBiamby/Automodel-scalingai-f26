@@ -240,8 +240,11 @@ Status after both loops: ✅ done and measured, ❌ tried and rejected/blocked, 
    runs), explicit MoE prefetch implemented (overlap 3.7% → 23%). ▶ Next: FSDP2 copy-in/out kernels are still ~12% of
    the step; a persistent-buffer FSDP (Megatron-FSDP) would remove them but is not wired up for EP models.
 5. ✅ **Kernel choices**: fused Adam (+3.4%), TE RMSNorm (+2.1%), FP8 on dense TE linears (+2.7%, LM head kept
-   high-precision). ▶ FP8 on the expert GEMMs (~22% of the step) needs TE-GroupedLinear support in the Nemotron-V3
-   state-dict adapter; it is the largest remaining compute lever (≤ ~10%).
+   high-precision). ▶ FP8 on the expert GEMMs (~22% of the step) is the largest remaining compute lever (≤ ~10%).
+   It needs `experts: te` to load under EP×FSDP expert sharding: TE GroupedLinear exposes `down_projs` /
+   `gate_and_up_projs` as virtual stacked copies, and the HF→native conversion does not produce them, so DCP's
+   load planner reports `Missing key ... experts.down_projs` (the uneven-shard part is already fixed, `def7b8de`).
+   Blockwise FP8 additionally needs CUDA ≥ 12.9.
 6. ✅ **Host-side hygiene**: control Python GC (`gc_every_steps`, −9% mean step time on 8 GPUs). ▶ CUDA graphs for the
    Mamba mixer / MoE router matter again whenever the configuration is host-bound (e.g. 8 GPUs at small micro-batch).
 7. ▶ **Checkpointing recompute** (~⅓ extra forward) is the largest remaining non-communication overhead on 6 GPUs; the
