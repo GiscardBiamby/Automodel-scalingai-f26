@@ -47,6 +47,7 @@ distributed:
   ep_size: 2          # must divide both 6 GPUs and 128 experts
   reshard_after_forward: true   # experts are FSDP-sharded over 3 ranks; keeping them gathered after forward OOMs
   activation_checkpointing: true  # full AC frees the memory for 8 packs/GPU (selective AC was slower: 9.3k vs 10.2k tok/s at 4 packs)
+  activation_checkpointing_skip_block_types: [attention]   # 6 attention blocks keep activations: +0.8%, +3.8 GiB (skipping mamba OOMs)
   mp_policy:   # bf16 gradient reduce-scatter: halves expert-gradient traffic (+2.9% tok/s; loss identical over 30 steps).
     _target_: torch.distributed.fsdp.MixedPrecisionPolicy  # Caveat (lecture 7/8): bf16 grad reduction can hurt very long runs.
     param_dtype: bfloat16

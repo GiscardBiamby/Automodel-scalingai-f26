@@ -34,6 +34,9 @@ Useful MFU = real tokens/s/GPU × 19.36 GFLOP / 989 TFLOP/s.
 | best6v3_experts_te(_fp8) | same, after the 2D dim-0 fallback fix (`def7b8de`) | fail | | | | Nemotron-V3 state-dict adapter has no TE-experts layout (missing `down_projs`) |
 | best6v3_fp8_dense | FP8 (current scaling) on TE linears only | fail | | | | a TE linear receives a [1, 2688] input (FP8 needs leading dims % 8) |
 | best6v3_deepep_sms12/32/48/64 | `backend.dispatcher_num_sms` (default 20) | 12,442 / 13,344 / 13,699 / 13,759 | 24.4 / 26.1 / 26.8 / 26.9% | | 52.0 GiB | 64 adopted (+4.7%): DeepEP is on the critical path at EP=2 |
+| repeats of the adopted config | (mis-parsed knob = no-op) ×4 | 13,769 / 13,755 / 13,791 / 13,799 | | | | noise floor ≈ ±0.2% |
+| best6v6_noac_attn | skip AC on the 6 attention blocks (new knob `573ba645`) | 13,887 | 27.19% | 2.29 | 55.8 GiB | +0.8% vs mean of 5 reference runs; adopted |
+| best6v6_noac_mamba | skip AC on the 23 Mamba blocks | OOM | | | | |
 
 ## Profile of best6 + fused Adam + prefetch (1,172 ms/step, nsys steps 20-23)
 
