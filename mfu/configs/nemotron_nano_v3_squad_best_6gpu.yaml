@@ -2,7 +2,7 @@
 #   mfu/run.sh -c mfu/configs/nemotron_nano_v3_squad_best_6gpu.yaml --devices 2,3,4,5,6,7
 # Differences from nemotron_nano_v3_squad_best.yaml (8 GPUs): ep_size 8 -> 2 (6 is not a divisor of 128 experts),
 # reshard_after_forward true (experts are now FSDP-sharded 3 ways), full activation checkpointing and 8 packs/GPU
-# (global batch 48 packs), bf16 gradient reduction. Measured: 12,872 tok/s/GPU, 25.2% useful MFU
+# (global batch 48 packs), bf16 gradient reduction, TE RMSNorm. Measured: 13,136 tok/s/GPU, 25.7% useful MFU
 # (mfu/results/experiments_6gpu.md).
 
 recipe: TrainFinetuneRecipeForNextTokenPrediction
@@ -29,6 +29,9 @@ model:
   pretrained_model_name_or_path: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
   trust_remote_code: true
   output_hidden_states: true   # required by FusedLinearCrossEntropy
+  backend:   # defaults except rms_norm (torch_fp32 -> te: +2.1% tok/s, same loss)
+    _target_: nemo_automodel.components.models.common.BackendConfig
+    rms_norm: te
 
 checkpoint:
   enabled: false
