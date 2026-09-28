@@ -1,0 +1,104 @@
+# Lean Automodel runtime for hosts whose NVIDIA driver predates CUDA 13 (e.g. R550 / CUDA 12.4).
+#
+# The published nvcr.io/nvidia/nemo-automodel images are all CUDA 13.x and need driver >= 580, and
+# main's uv.lock pins torch==2.10.0+cu130. This image keeps the locked torch *version* but uses the
+# cu128 build, installs every other locked dependency at its uv.lock version (mfu/docker/requirements-cu128.txt,
+# produced by mfu/docker/export_requirements.sh, minus CUDA-13-specific wheels), and compiles the native extensions the
+# Nemotron-Nano-V3 recipe uses against it: Transformer Engine, mamba-ssm, causal-conv1d, DeepEP.
+# The CUDA 12.8 base image ships cuda-compat, which is supported on data-center R550 drivers.
+#
+# Build (from the repo root):
+#   docker build -f mfu/docker/Dockerfile.cu128 -t automodel-mfu:cu128 .
+# The repo itself is bind-mounted at /opt/Automodel at runtime (see mfu/docker.sh).
+
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3.12-dev python3.12-venv python-is-python3 \
+        build-essential ninja-build cmake git curl ca-certificates patch \
+        rdma-core libibverbs-dev libnvidia-ml-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.26 /uv /uvx /usr/local/bin/
+
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
+    VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:/usr/local/cuda/bin:$PATH \
+    UV_LINK_MODE=copy \
+    UV_NO_CACHE=1 \
+    TORCH_CUDA_ARCH_LIST="9.0" \
+    MAX_JOBS=64
+
+RUN uv venv /opt/venv --python /usr/bin/python3.12 --seed
+
+# torch 2.10.0 (the uv.lock version) built for CUDA 12.8.
+RUN uv pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu128
+
+# All other locked deps at their uv.lock versions; torch/triton are left as installed above.
+COPY mfu/docker/requirements-cu128.txt /tmp/requirements-cu128.txt
+RUN uv pip install -r /tmp/requirements-cu128.txt setuptools wheel packaging psutil ninja nvidia-ml-py && \
+    python -c "import torch; assert torch.__version__ == '2.10.0+cu128', torch.__version__"
+
+# Native extensions built against this torch (versions from uv.lock).
+RUN MAMBA_FORCE_BUILD=TRUE CAUSAL_CONV1D_FORCE_BUILD=TRUE \
+    uv pip install --no-build-isolation causal-conv1d==1.6.0 mamba-ssm==2.3.0
+
+# Transformer Engine from source at the uv.lock version (as upstream docker/Dockerfile does): the PyPI
+# transformer-engine-torch sdist hard-requires transformer_engine_cu13, so build core+torch together for CUDA 12.8.
+ARG TE_COMMIT=v2.19.0
+RUN git clone https://github.com/NVIDIA/TransformerEngine.git /tmp/TransformerEngine && cd /tmp/TransformerEngine && \
+    git fetch origin ${TE_COMMIT} && git checkout FETCH_HEAD && git submodule update --init --recursive && \
+    uv pip install nvidia-mathdx==25.1.1 && \
+    NVTE_FRAMEWORK=pytorch NVTE_RELEASE_BUILD=0 NVTE_BUILD_METAPACKAGE=0 NVTE_CUDA_ARCHS=90 NVTE_WITH_NCCL_EP=0 \
+    NVTE_BUILD_MAX_JOBS=32 NVTE_BUILD_THREADS_PER_JOB=4 NVTE_NO_LOCAL_VERSION=1 \
+    uv pip install --no-build-isolation -v . && \
+    cd / && rm -rf /tmp/TransformerEngine && \
+    python -c "import torch; assert torch.__version__ == '2.10.0+cu128', torch.__version__"
+
+# DeepEP at the uv.lock commit with upstream's patch, built WITHOUT NVSHMEM (-DDISABLE_NVSHMEM; torch cu128 ships
+# nvidia-nvshmem-cu12, so setup.py is patched to honour DEEPEP_DISABLE_NVSHMEM=1): intranode
+# (single-node NVLink) dispatch/combine only. The internode/low-latency kernels need CUDA >= 12.9 launch
+# attributes, and a single 8-GPU node never uses them. libnvtx3interop (CUDA 13 only) is dropped from the
+# HybridEP extension's link line; NVTX3 is header-only on CUDA 12.
+COPY docker/common/deepep.patch /tmp/deepep.patch
+ARG DEEPEP_COMMIT=10d4dd7377d5bce900fbb4b80cce863764892b95
+RUN git clone https://github.com/deepseek-ai/DeepEP.git /tmp/DeepEP && cd /tmp/DeepEP && \
+    git fetch origin ${DEEPEP_COMMIT} && git checkout FETCH_HEAD && \
+    patch -p1 < /tmp/deepep.patch && \
+    test "$(grep -c '^    if nvshmem_dir is None:$' setup.py)" = 1 && \
+    sed -i "s/^    if nvshmem_dir is None:$/    if os.getenv('DEEPEP_DISABLE_NVSHMEM') == '1':\\n        disable_nvshmem = True\\n    elif nvshmem_dir is None:/" setup.py && \
+    sed -i 's/libraries = \["cuda", "nvtx3interop"\]/libraries = ["cuda"]/' setup.py && grep -q 'libraries = \["cuda"\]' setup.py && \
+    DEEPEP_DISABLE_NVSHMEM=1 uv pip install --no-build-isolation . && \
+    cd / && rm -rf /tmp/DeepEP /tmp/deepep.patch
+
+# libnvidia-ml-dev (needed only to build DeepEP) drags in libnvidia-compute-5xx, whose libnvidia-ml.so.1 / libcuda
+# would shadow the host driver's (550) libraries that the NVIDIA container runtime injects -> NVML "version
+# mismatch". Remove them so NVML/libcuda resolve to the host driver at runtime.
+# Also remove the base image's system cuDNN (9.8, only needed to compile TE): TE prefers system libraries,
+# torch uses the nvidia-cudnn-cu12 wheel (9.10.2), and two cuDNNs in one process segfaulted in fused_attn_bwd.
+RUN apt-get purge -y --allow-change-held-packages --auto-remove libnvidia-ml-dev 'libnvidia-compute-*' 'libnvidia-decode-*' \
+        libcudnn9-cuda-12 libcudnn9-dev-cuda-12 && \
+    rm -rf /var/lib/apt/lists/* && ldconfig && \
+    ! ls /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.5* /usr/lib/x86_64-linux-gnu/libcuda.so.5* 2>/dev/null
+
+# Nsight Systems matching the CUDA 12.8 toolkit (2024.6.2): used by mfu/run.sh --profile nsys.
+RUN apt-get update && apt-get install -y --no-install-recommends cuda-nsight-systems-12-8 && \
+    rm -rf /var/lib/apt/lists/* && ln -sf "$(ls -d /opt/nvidia/nsight-systems/*/bin/nsys | head -1)" /usr/local/bin/nsys && nsys --version
+
+# cut-cross-entropy (uv.lock `dev` group, which the upstream image installs via --all-groups): backs
+# loss_fn=FusedLinearCrossEntropy, which never materializes the [tokens x 131k-vocab] logits.
+RUN uv pip install --no-deps "cut-cross-entropy @ git+https://github.com/apple/ml-cross-entropy.git@87a86aba72cfd2f0d8abecaf81c13c4528ea07d8"
+
+# Editable install of Automodel pointing at /opt/Automodel (the host checkout is mounted there at runtime).
+COPY pyproject.toml README.md LICENSE /opt/Automodel/
+COPY nemo_automodel/__init__.py nemo_automodel/package_info.py /opt/Automodel/nemo_automodel/
+RUN uv pip install --no-deps -e /opt/Automodel && \
+    git config --system --add safe.directory /opt/Automodel && \
+    chmod -R a+rX /opt/venv
+
+# Import-level check only; TE/DeepEP need a GPU driver, which is not available during `docker build`.
+RUN python -c "import torch, transformers, wandb; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'transformers', transformers.__version__)" && \
+    uv pip list | grep -iE "^(transformer.engine|mamba.ssm|causal.conv1d|deep.ep)"
+
+WORKDIR /opt/Automodel
