@@ -10,7 +10,8 @@
 #   -s, --steps N         override step_scheduler.max_steps
 #   -p, --profile MODE    none (default) | nsys
 #       --nsys-steps A:B  optimizer-step capture window [A, B) for nsys (default 10:13)
-#       --gpus N          processes per node (default 8)
+#       --gpus N          processes per node (default 8, or the number of --devices)
+#       --devices LIST    host GPU ids to use, e.g. 2,3,4,5,6,7 (default: all); other GPUs are not touched
 #       --no-wandb        disable W&B logging
 #       --force           skip the "GPUs are busy" guard (>4 GiB used or >10% util; shared machine!)
 #
@@ -25,7 +26,8 @@ NAME=""
 STEPS=""
 PROFILE="none"
 NSYS_STEPS="10:13"
-NPROC=8
+NPROC=""
+DEVICES=""
 WANDB=1
 FORCE=0
 EXTRA=()
@@ -38,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     -p|--profile) PROFILE="$2"; shift 2 ;;
     --nsys-steps) NSYS_STEPS="$2"; shift 2 ;;
     --gpus) NPROC="$2"; shift 2 ;;
+    --devices) DEVICES="$2"; shift 2 ;;
     --no-wandb) WANDB=0; shift ;;
     --force) FORCE=1; shift ;;
     --) shift; EXTRA=("$@"); break ;;
@@ -50,12 +53,17 @@ cd "$REPO_DIR"
 [[ -f "$CONFIG" ]] || { echo "config not found: $CONFIG" >&2; exit 2; }
 [[ "$PROFILE" == "none" || "$PROFILE" == "nsys" ]] || { echo "--profile must be none|nsys" >&2; exit 2; }
 NAME="${NAME:-$(basename "$CONFIG" .yaml)}"
+if [[ -n "$DEVICES" ]]; then
+  NPROC="${NPROC:-$(echo "$DEVICES" | tr ',' '\n' | wc -l)}"
+  export MFU_GPUS="$DEVICES"
+fi
+NPROC="${NPROC:-8}"
 
 # --- Shared-machine guard: refuse to start if anyone is using the GPUs ---------------------------
 if [[ "$FORCE" -eq 0 ]]; then
   # Busy = >4 GiB used or >10% utilization in any of 3 samples (idle notebooks holding a little memory are OK).
   busy=$(for _ in 1 2 3; do nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader,nounits; sleep 1; done \
-    | awk -F', ' '$2 > 4096 || $3 > 10 {print $1}' | sort -u)
+    | awk -F', ' -v devs=",${DEVICES}," '(devs == ",," || index(devs, "," $1 ",")) && ($2 > 4096 || $3 > 10) {print $1}' | sort -u)
   if [[ -n "$busy" ]]; then
     echo "GPUs busy (>4 GiB used or >10% util): $(echo $busy | tr '\n' ' ')" >&2
     nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv >&2 || true
@@ -73,6 +81,7 @@ cp "$CONFIG" "$RUN_DIR/config.yaml"
 {
   echo "commit: $(git rev-parse HEAD) ($(git rev-parse --abbrev-ref HEAD))"
   echo "image:  $IMAGE"
+  echo "gpus:   ${DEVICES:-all} (nproc $NPROC)"
   echo "host:   $(hostname)"
   echo; git status --short; echo; git diff HEAD
 } > "$RUN_DIR/git.txt"

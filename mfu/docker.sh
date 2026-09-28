@@ -7,6 +7,7 @@
 # - Runs as the host user so files written to mfu/runs/ are not root-owned.
 # - Mounts the host HF cache (~/.cache/huggingface) and a per-user cache dir for triton/torch/wandb.
 # - Forwards WANDB_API_KEY / HF_TOKEN from the host environment when set (never written to disk here).
+# - MFU_GPUS=2,3,4,5,6,7 exposes only those host GPUs (default: all).
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,6 +24,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 mkdir -p "$HF_CACHE" "$USER_CACHE/home"
+GPU_SPEC="all"
+[[ -n "${MFU_GPUS:-}" ]] && GPU_SPEC="\"device=${MFU_GPUS}\""
 
 TTY_FLAGS=()
 [[ -t 0 && -t 1 ]] && TTY_FLAGS=(-it)
@@ -30,7 +33,7 @@ TTY_FLAGS=()
 
 exec docker run --rm "${TTY_FLAGS[@]}" \
   --name "$NAME" \
-  --gpus all \
+  --gpus "$GPU_SPEC" \
   --network host --ipc host \
   --ulimit memlock=-1 --ulimit stack=67108864 --ulimit core=0 \
   --user "$(id -u):$(id -g)" \
