@@ -41,6 +41,7 @@ Useful MFU = real tokens/s/GPU × 19.36 GFLOP / 989 TFLOP/s.
 | best6v7_sharedoverlap_sms32 | same, DeepEP 32 SMs | 13,384 | 26.2% | 2.38 | 55.8 GiB | −3.6%; rejected |
 | best6v8_noac_mamba8 | also skip AC on 8 of 23 Mamba layers (`activation_checkpointing_skip_layers`) | 13,069 | 25.6% | 2.44 | 63.9 GiB | −5.9%: less recompute but slower (likely allocator pressure near the memory limit); rejected |
 | best6v8_noac_mamba12 | 12 of 23 Mamba layers | OOM | | | | |
+| best6v9_sms96 | DeepEP 96 SMs (on top of no-AC-attention) | 13,953 | 27.31% | 2.28 | 55.8 GiB | +0.5% vs 64 SMs; adopted (final) |
 
 ## Profile of best6 + fused Adam + prefetch (1,172 ms/step, nsys steps 20-23)
 

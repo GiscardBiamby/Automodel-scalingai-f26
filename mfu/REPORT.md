@@ -198,10 +198,13 @@ producing `[128, 5568, 896]` instead of `[128, 1856, 2688]` (`a11eba86`); (iii) 
 | - | FP8 GEMMs (TE experts / TE linears) | fail | | Nemotron-V3 adapter lacks the TE-experts layout; a TE linear sees a [1, 2688] input (FP8 needs leading dims % 8) |
 
 | 7 | skip AC on the 6 attention blocks (new `activation_checkpointing_skip_block_types`) | 13,887 | 27.2% | +0.8% vs the mean of 5 repeat runs of step 6 (noise ≈ ±0.2%); skipping the 23 Mamba blocks OOMs |
+| - | shared-expert side-stream overlap (ported to the generic MoE) | 13,702 | | −1.3% (−3.6% with 32 DeepEP SMs): competes with DeepEP for SMs; rejected |
+| - | also skip AC on 8 of 23 Mamba layers (`activation_checkpointing_skip_layers`) | 13,069 | | −5.9% at 63.9 GiB (likely allocator pressure); rejected |
+| 8 | DeepEP 96 SMs | **13,953** | **27.3%** | +0.5% vs 64 SMs; final |
 
 ![6-GPU progression](results/figures/mfu_6gpu_progression.png)
 
-**Result:** 13,887 tokens/s/GPU and 27.2% useful MFU on 6 GPUs, **29.2× the 6-GPU baseline** and 17% more per GPU than
+**Result:** 13,953 tokens/s/GPU and 27.3% useful MFU on 6 GPUs, **29.3× the 6-GPU baseline** and 18% more per GPU than
 the 8-GPU best configuration (11,836). Profile of the final config (`runs/*_final6_nsys`, 2,283 ms/step): GPUs 97.5%
 busy, compute kernels 87.9% of the step, communication 21.4% of which only 9.6% is exposed (was 29%); GEMMs are half
 the step (49.5%) at ~73% of BF16 peak counting the checkpointing recompute. What remains: GEMM recompute from full AC,
