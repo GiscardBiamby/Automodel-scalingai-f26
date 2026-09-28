@@ -16,6 +16,10 @@ params) and for profiling where time goes. Target: 1 node, 8x H100 80GB SXM.
 | `summarize.py` | Steady-state table from `training.jsonl`: step time, tokens/s/GPU, MFU, padding efficiency, memory |
 | `analyze_nsys.py` | GPU time budget from an nsys capture: busy/idle, compute vs comm, exposed comm, per-category kernel time, top kernels, NVTX phases |
 | `configs/nemotron_nano_v3_squad_{pad64,pack4096,best}.yaml` | Interventions A, B and the best combined config (E); see `REPORT.md` |
+| `configs/nemotron_nano_v3_squad_best_6gpu.yaml` | Best config on 6 GPUs (EP=2, 8 packs, full AC except attention, bf16 reduce, TE norm, 64 DeepEP SMs) |
+| `bench_nccl.py` | NCCL all-gather / reduce-scatter bus bandwidth at FSDP message sizes |
+| `results/experiments_6gpu.md` | Every 6-GPU experiment with its result and verdict |
+| `notes/lecture_techniques.md` | Course-lecture techniques mapped to the measured profile |
 | `analyze_cpu.py` | Host-side view of an nsys capture: CUDA API time, CPU time per NVTX range, outlier calls (e.g. cuDNN graph builds) |
 | `bench_te_attn_shapes.py` | 1-GPU microbenchmark: TE fused attention first call at a new sequence length vs repeat |
 | `squad_lengths.py` | SQuAD token-length distribution and the padding / packing efficiency it implies |
@@ -59,6 +63,8 @@ mfu/run.sh --name baseline_nsys --profile nsys --steps 14 --nsys-steps 10:13
 mfu/docker.sh -- python mfu/analyze_nsys.py mfu/runs/<ts>_baseline_nsys   # GPU-side breakdown (+ exports profile.sqlite)
 python3 mfu/analyze_cpu.py mfu/runs/<ts>_baseline_nsys                   # host-side breakdown
 mfu/run.sh --name best -c mfu/configs/nemotron_nano_v3_squad_best.yaml  # best config (10.5x)
+mfu/run.sh --name best6 -c mfu/configs/nemotron_nano_v3_squad_best_6gpu.yaml --devices 2,3,4,5,6,7  # 6-GPU best (13.9k tok/s/GPU)
+MFU_GPUS=none mfu/docker.sh -- python -m pytest -q tests/unit_tests/moe   # CPU-only unit tests (no GPU touched)
 python3 mfu/summarize.py mfu/runs/<ts>_baseline mfu/runs/<ts>_other   # compare runs
 ```
 
