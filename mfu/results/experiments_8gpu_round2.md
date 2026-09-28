@@ -13,3 +13,15 @@ the row above; 30-step runs, medians of steps 5+. Useful MFU = real tokens/s/GPU
 | e8_r3_sms64 | + DeepEP 64 SMs | 14,238 | 27.9% | 0.559 | 56.8 GiB | +10.8% (DeepEP ~22% of the step at EP=8) |
 | e8_r3b_sms96 | DeepEP 96 SMs instead | 14,318 | 28.0% | 0.556 | 56.8 GiB | +0.6% vs 64 |
 | e8_r4_fp8 | + FP8 dense linears (at 64 SMs) | 14,330 | 28.1% | 0.555 | 56.1 GiB | +0.6% vs r3 (near noise: GEMMs are a smaller share at 8 GPUs) |
+
+Batch size / activation checkpointing (base = e8_r2 + DeepEP 96 SMs + FP8 dense linears):
+
+| run | change | tok/s/GPU | useful MFU | step (s) | peak mem | Δ vs e8_b1 |
+|---|---|---|---|---|---|---|
+| e8_b1_base | base, 2 packs/GPU (GBS 16) | 14,395 | 28.2% | 0.553 | 56.1 GiB | reference |
+| e8_b2_lbs4 | 4 packs/GPU, no AC | OOM | | | | |
+| e8_b3_lbs4_ac | 4 packs + full AC | 12,698 | 24.9% | 1.255 | 37.9 GiB | −11.8% |
+| e8_b4_lbs8_ac | 8 packs + full AC | 13,427 | 26.3% | 2.370 | 47.8 GiB | −6.7% |
+
+Opposite of 6 GPUs: at EP=8 there is no per-micro-batch expert all-gather to amortise, so the checkpointing
+recompute is pure overhead.
