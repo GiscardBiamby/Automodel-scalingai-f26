@@ -1192,6 +1192,7 @@ def parallelize_model(
     activation_checkpointing: bool | str = False,
     ignore_router_for_ac: bool = True,
     activation_checkpointing_scope: str | list[str] | tuple[str, ...] = "all",
+    activation_checkpointing_skip_block_types: tuple[str, ...] = (),
     reshard_after_forward: bool = False,
     lm_head_precision: str | torch.dtype | None = None,
     wrap_outer_model: bool = True,
@@ -1270,6 +1271,14 @@ def parallelize_model(
         apply_ep(model, moe_mesh[ep_axis_name], moe_mesh=moe_mesh)
 
     if activation_checkpointing:
+        if activation_checkpointing_skip_block_types:
+            skip_types = set(activation_checkpointing_skip_block_types)
+            skipped = 0
+            for module in model.modules():
+                if getattr(module, "block_type", None) in skip_types:
+                    module._nemo_disable_activation_checkpointing = True
+                    skipped += 1
+            logger.info("Activation checkpointing disabled for %d block(s) of type %s", skipped, sorted(skip_types))
         apply_ac(
             model,
             ignore_router=ignore_router_for_ac,

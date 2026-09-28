@@ -441,6 +441,9 @@ def instantiate_infrastructure(
             # __post_init__); thread it through so expert-parallel configs keep
             # scope parity with the generic FSDP2/DDP path.
             activation_checkpointing_scope=getattr(distributed_config, "activation_checkpointing_scope", "all"),
+            activation_checkpointing_skip_block_types=tuple(
+                getattr(distributed_config, "activation_checkpointing_skip_block_types", ()) or ()
+            ),
             **moe_kwargs,
         )
     elif autopipeline is not None and model_wrapper is not None:

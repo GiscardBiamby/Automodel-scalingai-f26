@@ -272,6 +272,10 @@ class FSDP2Config:
             selects every extracted group. Scoped values such as
             ``"language"``, ``"vision"``, and ``"multimodal"`` are filtered
             to trainable layers before generic wrapping.
+        activation_checkpointing_skip_block_types (list[str]): Block types (a block's ``block_type``
+            attribute, e.g. ``"mamba"``, ``"attention"``, ``"moe"`` for hybrid models) to leave
+            un-checkpointed when activation checkpointing is on, trading memory for less recompute.
+            Currently honoured by the MoE parallelizer. Default: checkpoint every block.
         defer_fsdp_grad_sync (bool): Defer FSDP gradient sync to final micro-batch.
         reshard_after_forward (Optional[bool]): Override layer-level FSDP2 resharding.
             ``None`` preserves AutoModel's heuristic: pipeline-parallel layers do
@@ -315,6 +319,7 @@ class FSDP2Config:
     autocast_dtype: torch.dtype | None = None
     activation_checkpointing: ActivationCheckpointingMode = False
     activation_checkpointing_scope: ActivationCheckpointingScope = "all"
+    activation_checkpointing_skip_block_types: List[str] = field(default_factory=list)
     defer_fsdp_grad_sync: bool = True
     reshard_after_forward: bool | None = None
     enable_async_tensor_parallel: bool = False
