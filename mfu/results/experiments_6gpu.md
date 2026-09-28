@@ -44,6 +44,8 @@ Useful MFU = real tokens/s/GPU × 19.36 GFLOP / 989 TFLOP/s.
 | best6v9_sms96 | DeepEP 96 SMs (on top of no-AC-attention) | 13,953 | 27.31% | 2.28 | 55.8 GiB | +0.5% vs 64 SMs; adopted (final) |
 | final6_100steps | final config file as committed, no overrides, 100 steps | 13,946 | 27.30% | 2.28 (mean 2.30) | 56.0 GiB | reproduces; loss 5.35 → 0.78 (step 20) → 0.05 (step 99, ~1 epoch), grad norm 0.65, 2/95 steps > 3 s |
 | best6v10_fp8_dense | FP8 current scaling on TE linears, LM head kept out of FP8 (fix `fix(models)`) | 14,326 | 28.04% | 2.22 | 56.9 GiB | +2.7%; loss 0.772 vs 0.777 at step 29 (tracks BF16); adopted (final) |
+| final6v2_check | committed final config file, no overrides | 14,299 | 27.99% | 2.23 | 56.9 GiB | reproduces within 0.2% |
+| best6v11_fp8_block | FP8 blockwise recipe | fail | | | | needs CUDA >= 12.9 (image is 12.8: torch 2.10 has no cu129 wheel) |
 
 ## Profile of best6 + fused Adam + prefetch (1,172 ms/step, nsys steps 20-23)
 
