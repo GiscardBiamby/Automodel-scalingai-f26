@@ -37,6 +37,8 @@ Useful MFU = real tokens/s/GPU × 19.36 GFLOP / 989 TFLOP/s.
 | repeats of the adopted config | (mis-parsed knob = no-op) ×4 | 13,769 / 13,755 / 13,791 / 13,799 | | | | noise floor ≈ ±0.2% |
 | best6v6_noac_attn | skip AC on the 6 attention blocks (new knob `573ba645`) | 13,887 | 27.19% | 2.29 | 55.8 GiB | +0.8% vs mean of 5 reference runs; adopted |
 | best6v6_noac_mamba | skip AC on the 23 Mamba blocks | OOM | | | | |
+| best6v7_sharedoverlap | shared experts on a side stream (new generic-MoE support `feat(moe)`) | 13,702 | 26.8% | 2.32 | 55.8 GiB | −1.3%: competes with DeepEP's 64 SMs; rejected |
+| best6v7_sharedoverlap_sms32 | same, DeepEP 32 SMs | 13,384 | 26.2% | 2.38 | 55.8 GiB | −3.6%; rejected |
 
 ## Profile of best6 + fused Adam + prefetch (1,172 ms/step, nsys steps 20-23)
 
