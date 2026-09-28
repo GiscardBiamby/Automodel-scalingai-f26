@@ -202,12 +202,21 @@ def hybridep_dispatch_replay_scope(recorder: HybridEPDispatchReplayRecorder | No
 def _is_nvshmem_available() -> bool:
     """Check if DeepEP was compiled with NVSHMEM support.
 
-    Uses is_sm90_compiled() as proxy — DeepEP's build enforces that
-    NVSHMEM is disabled when SM90 features are disabled.
+    DeepEP's build disables NVSHMEM when SM90 features are disabled, but the
+    converse does not hold: an SM90 build can still have NVSHMEM compiled out
+    (``-DDISABLE_NVSHMEM``, intranode-only). In that case the RDMA size query
+    raises, so probe it directly (with NVSHMEM it returns 0 for <= 8 ranks).
     """
     global _nvshmem_available
     if _nvshmem_available is None:
-        _nvshmem_available = Buffer.is_sm90_compiled()
+        if not Buffer.is_sm90_compiled():
+            _nvshmem_available = False
+        else:
+            try:
+                Buffer.get_dispatch_config(8).get_rdma_buffer_size_hint(1024, 8)
+                _nvshmem_available = True
+            except RuntimeError:
+                _nvshmem_available = False
     return _nvshmem_available
 
 
