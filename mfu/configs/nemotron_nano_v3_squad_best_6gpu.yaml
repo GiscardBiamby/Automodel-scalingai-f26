@@ -1,13 +1,14 @@
 # Best configuration on 6 GPUs (host GPUs 2-7; GPUs 0-1 left to groupmates). Launch with
 #   mfu/run.sh -c mfu/configs/nemotron_nano_v3_squad_best_6gpu.yaml --devices 2,3,4,5,6,7
 # Differences from nemotron_nano_v3_squad_best.yaml (8 GPUs): ep_size 8 -> 2 (6 is not a divisor of 128 experts),
-# reshard_after_forward true (experts are now FSDP-sharded 3 ways), global batch 16 -> 12 packs.
+# reshard_after_forward true (experts are now FSDP-sharded 3 ways), full activation checkpointing and 8 packs/GPU
+# (global batch 48 packs). Measured: 12,510 tok/s/GPU, 24.5% useful MFU (mfu/results/experiments_6gpu.md).
 
 recipe: TrainFinetuneRecipeForNextTokenPrediction
 
 step_scheduler:
-  global_batch_size: 12   # 6 GPUs x 2 packs -> no gradient accumulation (~48k real tokens/step)
-  local_batch_size: 2     # 2 packs/GPU -> no gradient accumulation (fits thanks to FusedLinearCrossEntropy)
+  global_batch_size: 48   # 6 GPUs x 8 packs, no gradient accumulation (~190k real tokens/step)
+  local_batch_size: 8     # 8 packs/GPU: FSDP expert traffic is paid per micro-batch, so bigger micro-batches amortise it
   gc_every_steps: 50      # disable automatic Python GC (gen-2 pauses ~1 s); manual gen-1 collect every 50 steps
   ckpt_every_steps: 1000
   val_every_steps: 1000
@@ -39,6 +40,7 @@ distributed:
   cp_size: 1
   ep_size: 2          # must divide both 6 GPUs and 128 experts
   reshard_after_forward: true   # experts are FSDP-sharded over 3 ranks; keeping them gathered after forward OOMs
+  activation_checkpointing: true  # full AC frees the memory for 8 packs/GPU (selective AC was slower: 9.3k vs 10.2k tok/s at 4 packs)
   sequence_parallel: false
   defer_fsdp_grad_sync: false
 
