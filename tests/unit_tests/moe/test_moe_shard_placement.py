@@ -43,6 +43,19 @@ class TestMoeShardPlacement:
         assert grouped.ndim == 3
         assert _moe_shard_placement(grouped) == Shard(1)
 
+    def test_divisible_dim1_is_kept_for_any_shard_size(self):
+        grouped = torch.zeros(64, 2048, 768)
+        assert _moe_shard_placement(grouped, shard_size=4) == Shard(1)
+
+    def test_indivisible_dim1_falls_back_to_first_divisible_dim(self):
+        # Nemotron-V3 down_proj per EP rank: [experts, 1856, 2688]; 1856 % 3 != 0, 2688 % 3 == 0.
+        grouped = torch.zeros(64, 1856, 2688)
+        assert _moe_shard_placement(grouped, shard_size=3) == Shard(2)
+
+    def test_no_divisible_dim_keeps_dim1(self):
+        grouped = torch.zeros(4, 7, 11)
+        assert _moe_shard_placement(grouped, shard_size=3) == Shard(1)
+
 
 class TestMoeCheckpointMetadata:
     def test_empty_dtype_is_ignored_but_shape_and_device_are_retained(self):

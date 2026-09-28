@@ -96,7 +96,7 @@ def _register_moe_checkpoint_determinism_check() -> str:
     return _EMPTY_TENSOR_DETERMINISM_CHECK
 
 
-def _moe_shard_placement(param):
+def _moe_shard_placement(param, shard_size: int = 1):
     """FSDP shard placement for grouped-expert params.
 
     Shard on dim=1 for the (>=2D) expert weights since there may be more shards than
@@ -104,8 +104,17 @@ def _moe_shard_placement(param):
     GroupedLinear path, shape [out_features]) has no dim 1, so shard it on dim 0
     instead. FSDP all-gathers before use, so the shard dim is a storage detail and does
     not change compute.
+
+    FSDP2 only supports uneven sharding on dim 0, so when dim 1 is not divisible by the
+    shard count (e.g. Nemotron-V3's 1856-wide expert FFN over 3 or 6 shards), use the
+    first later dim that is; dim 1 stays the choice whenever it divides evenly.
     """
-    return Shard(0) if param.ndim < 2 else Shard(1)
+    if param.ndim < 2:
+        return Shard(0)
+    for dim in range(1, param.ndim):
+        if param.shape[dim] % shard_size == 0:
+            return Shard(dim)
+    return Shard(1)
 
 
 def _is_selective_ac(activation_checkpointing: object) -> bool:
@@ -914,7 +923,7 @@ def apply_fsdp(
             fully_shard(
                 moe_module.experts,
                 mesh=ep_shard_mesh,
-                shard_placement_fn=_moe_shard_placement,
+                shard_placement_fn=functools.partial(_moe_shard_placement, shard_size=ep_shard_mesh.size()),
                 reshard_after_forward=experts_reshard_after_forward,
                 mp_policy=experts_mp_policy,
                 offload_policy=offload_policy,
