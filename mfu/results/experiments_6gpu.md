@@ -27,6 +27,8 @@ Useful MFU = real tokens/s/GPU × 19.36 GFLOP / 989 TFLOP/s.
 | best6_lbs4_fullac | 4 packs + full AC | 10,245 | 20.06% | 1.55 | 46.9 GiB | +49% |
 | best6_lbs6_fullac | 6 packs + full AC (GBS 36) | 11,696 | 22.90% | 2.04 | 49.1 GiB | +70% |
 | best6_lbs8_fullac | 8 packs + full AC (GBS 48) | 12,510 | 24.49% | 2.54 | 52.0 GiB | +81%, adopted (> 8-GPU best per GPU) |
+| best6_lbs12_fullac | 12 packs + full AC (GBS 72) | 12,257 | 23.99% | 3.89 | 60.7 GiB | slower than 8 packs; rejected |
+| best6_lbs8_fullac_bf16rs | 8 packs + full AC + bf16 grad reduce-scatter | 12,872 | 25.20% | 2.47 | 52.0 GiB | +2.9%, loss identical to 3 d.p. over 30 steps; adopted |
 
 ## Profile of best6 + fused Adam + prefetch (1,172 ms/step, nsys steps 20-23)
 
