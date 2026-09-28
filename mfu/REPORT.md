@@ -169,6 +169,44 @@ layer call), non-GEMM compute ~35% of compute (optimizer 61 ms, copies/concat 56
 
 ![packed timeline](results/figures/timeline_pack4096.png)
 
+## 6b. Second optimisation loop on 6 GPUs (GPUs 0-1 left to groupmates)
+
+The node is shared, so a second profile → diagnose → change → measure loop ran on 6 GPUs. Six GPUs change the
+parallel layout: `ep_size` must divide both 6 and 128 experts, so EP=2 and each EP rank's 64 experts are also
+FSDP-sharded 3 ways. That made the regime **GPU/communication-bound instead of host-bound**, and moved the
+bottleneck to FSDP traffic of expert weights. Full log: `results/experiments_6gpu.md`; config:
+`configs/nemotron_nano_v3_squad_best_6gpu.yaml`.
+
+**Framework fixes needed first** (all upstreamable, each with unit tests): (i) FSDP2 cannot shard unevenly on dims ≠ 0
+and the expert FFN width is 1856 = 2⁶·29, so `_moe_shard_placement` now picks the first evenly divisible dim
+(`475923eb`, 2D per-expert fallback `def7b8de`); (ii) the HF loader labelled expert DTensors `Shard(1)` regardless,
+producing `[128, 5568, 896]` instead of `[128, 1856, 2688]` (`a11eba86`); (iii) MoE models silently ignored
+`enable_fsdp2_prefetch`, so explicit prefetch chains were added for MoE blocks and their experts (`36e68a48`);
+(iv) partial activation checkpointing by block type (`573ba645`).
+
+| step | change (each measured alone on top of the previous row) | tok/s/GPU | useful MFU | evidence / why |
+|---|---|---|---|---|
+| baseline | shipped recipe, EP=2, local batch 4 (8 OOMs), `reshard_after_forward` | 476 | 0.93% | graph rebuilds per micro-batch + per-micro-batch expert all-gathers |
+| 1 | 8-GPU best re-sized (packing, fused CE, 2 packs, GC) | 6,668 | 13.1% | 14.0× |
+| - | DeepEP async dispatch | 6,286 | | −5.7%: nothing to overlap it with; rejected |
+| - | explicit FSDP2 prefetch | 6,665 | | overlap 3.7% → 23% of step, but ±0 throughput: GPU-bound elsewhere |
+| 2 | fused Adam | 6,896 | 13.5% | +3.4% |
+| 3 | 8 packs/GPU + full activation checkpointing | 12,510 | 24.5% | +81%: profile showed all-gather 299 ms + reduce-scatter 275 ms + FSDP copies 241 ms per 1.17 s step. Expert weights are gathered per micro-batch regardless of its size, so more tokens per micro-batch amortise them; AC pays for the memory. Selective AC was slower than full AC (9.3k vs 10.2k at 4 packs); 12 packs slower than 8 |
+| 4 | bf16 gradient reduce-scatter | 12,872 | 25.2% | +2.9%; loss and grad norm identical to 3 d.p. over 30 steps (lecture caveat on very long runs noted) |
+| 5 | TE RMSNorm (was torch fp32) | 13,136 | 25.7% | +2.1%, same loss |
+| 6 | DeepEP 64 SMs (default 20) | 13,759 | 26.9% | +4.7%; 12/20/32/48/64 SMs → 12.4/13.1/13.3/13.7/13.8k: at EP=2 dispatch/combine is on the critical path |
+| - | FP8 GEMMs (TE experts / TE linears) | fail | | Nemotron-V3 adapter lacks the TE-experts layout; a TE linear sees a [1, 2688] input (FP8 needs leading dims % 8) |
+
+<!-- PARTIAL_AC_RESULT -->
+
+**Result:** 13,759 tokens/s/GPU and 26.9% useful MFU on 6 GPUs, **28.9× the 6-GPU baseline** and 16% more per GPU than
+the 8-GPU best configuration (11,836). The profile of the adopted config (before steps 5-6) shows the GPUs 97.6%
+busy, compute kernels 83% of the step and GEMMs at ~73% of BF16 peak (counting the checkpointing recompute), so the
+remaining headroom is mostly the checkpointing recompute itself, FSDP copy kernels (12%), DeepEP (10%) and Mamba
+kernels (10%). Caveat: this configuration uses a larger global batch (48 packs ≈ 190k tokens/step vs ≈ 53k in the
+baseline); with FSDP-sharded experts, throughput is coupled to micro-batch size because weight traffic is paid per
+micro-batch and gradient accumulation cannot amortise it.
+
 ## 7. Recommendations: what to optimise next (ranked by evidence × expected gain)
 
 1. **Make fixed shapes the default for SQuAD-style SFT.** Ship Nano-V3 SQuAD with THD packing (or at least
