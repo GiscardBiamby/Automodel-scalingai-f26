@@ -56,6 +56,11 @@ class TestMoeShardPlacement:
         grouped = torch.zeros(4, 7, 11)
         assert _moe_shard_placement(grouped, shard_size=3) == Shard(1)
 
+    def test_2d_per_expert_weight_falls_back_to_dim0(self):
+        # experts="te" GroupedLinear keeps one [out, in] weight per expert; 1856 % 3 != 0.
+        weight = torch.zeros(2688, 1856)
+        assert _moe_shard_placement(weight, shard_size=3) == Shard(0)
+
 
 class TestMoeCheckpointMetadata:
     def test_empty_dtype_is_ignored_but_shape_and_device_are_retained(self):

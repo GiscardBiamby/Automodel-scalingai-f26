@@ -107,14 +107,16 @@ def _moe_shard_placement(param, shard_size: int = 1):
 
     FSDP2 only supports uneven sharding on dim 0, so when dim 1 is not divisible by the
     shard count (e.g. Nemotron-V3's 1856-wide expert FFN over 3 or 6 shards), use the
-    first later dim that is; dim 1 stays the choice whenever it divides evenly.
+    first later dim that is; dim 1 stays the choice whenever it divides evenly. A 2D
+    per-expert weight (experts="te" GroupedLinear, [out, in]) has no expert dim, so if
+    dim 1 does not divide it falls back to dim 0, where uneven sharding is allowed.
     """
     if param.ndim < 2:
         return Shard(0)
     for dim in range(1, param.ndim):
         if param.shape[dim] % shard_size == 0:
             return Shard(dim)
-    return Shard(1)
+    return Shard(0) if param.ndim == 2 else Shard(1)
 
 
 def _is_selective_ac(activation_checkpointing: object) -> bool:
