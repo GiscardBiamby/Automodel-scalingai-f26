@@ -1,0 +1,1 @@
+torchrun --standalone --nproc-per-node 6 -m nemo_automodel.cli.app /opt/Automodel/mfu/runs/20260928-091508_best6_lbs3/config.yaml --checkpoint.checkpoint_dir=/opt/Automodel/mfu/runs/20260928-091508_best6_lbs3 --wandb.name=20260928-091508_best6_lbs3 --step_scheduler.max_steps=30 --step_scheduler.local_batch_size=3 --step_scheduler.global_batch_size=18 

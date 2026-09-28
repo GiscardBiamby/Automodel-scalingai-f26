@@ -41,3 +41,11 @@ DeepEP 87 ms (7%, down from 22% at EP=8), optimizer 77 ms. Standalone NCCL on th
 Diagnosis: expert weight traffic is paid per micro-batch and does not depend on the number of tokens in it, so
 more tokens per micro-batch amortise it; activation memory was the blocker → activation checkpointing trades a
 recompute (~1/3 extra forward) for 2× tokens per all-gather, a net +49%.
+
+## Profile of the adopted 6-GPU config (8 packs, full AC, bf16 reduce; 2,482 ms/step, nsys steps 15-17)
+
+GPU busy 97.6%, idle 2.4%: the step is now GPU-bound. Compute kernels (union) 83%; communication 26% of which
+14.4% exposed. GEMM 1,137 ms (46%): with the full-AC forward recompute that is ~820 TFLOP per GPU per step, i.e.
+~720 TFLOP/s ≈ 73% of BF16 peak inside GEMMs; expert grouped GEMMs (CUTLASS sm90) ~557 ms, dense (cuBLAS nvjet)
+~470 ms. Copies 295 ms (12%), DeepEP 258 ms (10%), Mamba kernels 256 ms (10%), all-gather 258 ms and bf16
+reduce-scatter 145 ms (mostly overlapped). Remaining levers: lower-precision GEMMs (FP8), less recompute, FSDP copies.

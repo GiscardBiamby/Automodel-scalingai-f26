@@ -1,0 +1,1 @@
+torchrun --standalone --nproc-per-node 6 -m nemo_automodel.cli.app /opt/Automodel/mfu/runs/20260928-084307_best_6gpu/config.yaml --checkpoint.checkpoint_dir=/opt/Automodel/mfu/runs/20260928-084307_best_6gpu --wandb.name=20260928-084307_best_6gpu --step_scheduler.max_steps=30 --distributed.ep_size=2 --distributed.reshard_after_forward=true --step_scheduler.global_batch_size=12 
