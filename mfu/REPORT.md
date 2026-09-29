@@ -256,6 +256,7 @@ largest losses.
 | 4 | DeepEP 96 SMs (default 20) | 14,318 | 28.0% | **+11.4%** | DeepEP dispatch/combine was ~22% of the step at EP=8 and sits on the critical path |
 | 5 | FP8 on TE linears (attention + shared experts only) | 14,395 | 28.2% | +0.5% | see note below: FP8 covers only ~18% of GEMM FLOPs (4.2% of the step) and adds 15 ms/step of cast/amax kernels |
 | 6 | 3 packs/GPU, no AC (GBS 24) | **15,172** | **29.7%** | +5.4% | more tokens per per-layer host/launch cost; largest batch that fits without AC |
+| ✗ | 8192-token rows: 1 row/GPU / 2 rows/GPU | 14,378 / OOM | | ±0 vs 2×4096 / — | same tokens per GPU as 2×4096 (and 4×4096 OOM); throughput follows tokens per micro-batch, not row length |
 | ✗ | 4 packs + full AC / 8 packs + full AC / 4 packs + AC on MoE only | 12,698 / 13,427 / 13,554 | | −12 / −7 / −6% | no expert all-gather to amortise at EP=8, so recompute is pure cost (the 6-GPU winner does not transfer) |
 
 **End-to-end on 8 GPUs** (each row adds one change to the row above; rows 0-5 are 40-step runs, rows 6-11 30-step

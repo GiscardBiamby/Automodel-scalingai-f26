@@ -30,3 +30,15 @@ recompute is pure overhead; the best batch is the largest that fits *without* AC
 
 Adopted in `configs/nemotron_nano_v3_squad_best.yaml`: e8_b5 = 15,172 tok/s/GPU, 29.7% useful MFU (13.5× the
 shipped recipe, +28% over round-1 config E).
+
+Row length (packing size), on the final config (bf16 RS, TE norm, 96 DeepEP SMs, FP8 TE linears):
+
+| run | rows x length | tokens/GPU/micro-batch | tok/s/GPU | useful MFU | pad eff. | peak mem | note |
+|---|---|---|---|---|---|---|---|
+| e8_b1_base | 2 x 4096 | 8,192 | 14,395 | 28.2% | 0.970 | 56.1 GiB | |
+| e8_pack8192_x1 | 1 x 8192 | 8,192 | 14,378 | 28.1% | 0.985 | 56.1 GiB | same tokens/GPU as 2x4096: same speed despite +1.5 pt fill |
+| e8_b5_lbs3 | 3 x 4096 | 12,288 | 15,172 | 29.7% | 0.971 | 70.5 GiB | best; not expressible with 8192-token rows |
+| e8_pack8192_x2 | 2 x 8192 | 16,384 | OOM | | | | same as 4 x 4096 (OOM) |
+
+Throughput is set by tokens per GPU per micro-batch (bounded by memory), not by row length; 4096-token rows give the
+finer granularity needed to reach the 12,288-token optimum.
