@@ -132,7 +132,9 @@ its longest sample, and SQuAD lengths vary (mean 206, p50 193, p90 294, p99 429,
 backend caches an execution graph per shape; a miss builds a new forward and backward graph.
 *Evidence:* (a) the two slow calls per micro-batch sit exactly in the first attention layer of forward and backward;
 (b) an isolated microbenchmark of the same layer configuration (`mfu/bench_te_attn_shapes.py`, 1 GPU) measures
-**1,013-1,055 ms for the first fwd+bwd at a new length vs 1.23-1.34 ms for a repeat** (`results/te_attn_shapes.json`),
+**1,013-1,055 ms for the first fwd+bwd at a new length vs 1.23-1.34 ms for a repeat** (`results/te_attn_shapes.json`);
+an Nsight trace of the same benchmark (`results/te_attn_shapes_nsys.md`) shows the first call spends ~1,012 of 1,023 ms
+on the host outside any CUDA API call while the GPU runs the same 0.33 ms of kernels as a repeat,
 matching 470 + 590 ms in the trace; (c) fixing the shapes removes the stall (Section 6).
 *Why it costs so much:* the stall is on the host, so the GPU queue drains; all ranks hit it together, so the whole
 node idles.

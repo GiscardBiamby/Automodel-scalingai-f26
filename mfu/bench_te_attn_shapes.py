@@ -5,6 +5,9 @@ bshd, bf16, fwd+bwd) at the baseline micro-batch size (8) and SQuAD-like padded 
 times the first call (cache miss) and the mean of the next calls (cache hit).
 
 Usage: mfu/docker.sh -- env CUDA_VISIBLE_DEVICES=0 python mfu/bench_te_attn_shapes.py
+Profiled: MFU_GPUS=7 mfu/docker.sh -- nsys profile -o mfu/runs/te_attn_shapes_nsys/profile \
+          --trace cuda,nvtx,cudnn python mfu/bench_te_attn_shapes.py
+NVTX ranges first_call_seq<S> / repeat_x5_seq<S> mark each measurement.
 """
 
 import json
@@ -44,8 +47,10 @@ if __name__ == "__main__":
     run(attn, 128)  # global warmup (library init)
     results = []
     for s in [193, 257, 311, 384, 402, 449, 512]:
-        first = timed(lambda: run(attn, s))
-        repeat = sum(timed(lambda: run(attn, s)) for _ in range(5)) / 5
+        with torch.cuda.nvtx.range(f"first_call_seq{s}"):
+            first = timed(lambda: run(attn, s))
+        with torch.cuda.nvtx.range(f"repeat_x5_seq{s}"):
+            repeat = sum(timed(lambda: run(attn, s)) for _ in range(5)) / 5
         results.append({"seq_len": s, "first_call_ms": round(first, 1), "repeat_call_ms": round(repeat, 2)})
         print(results[-1], flush=True)
     print(json.dumps(results))
