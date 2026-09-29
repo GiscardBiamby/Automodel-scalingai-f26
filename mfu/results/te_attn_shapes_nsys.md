@@ -1,6 +1,6 @@
 # Nsight trace of the TE attention shape microbenchmark
 
-Trace: `mfu/runs/te_attn_shapes_nsys/profile.nsys-rep` (git-ignored; 1 GPU, `--trace cuda,nvtx,cudnn`), produced by
+Trace: `mfu/results/te_attn_shapes_nsys/profile.nsys-rep` (committed, 196 KB; 1 GPU, `--trace cuda,nvtx,cudnn`), produced by
 `MFU_GPUS=7 mfu/docker.sh -- nsys profile -o mfu/runs/te_attn_shapes_nsys/profile --trace cuda,nvtx,cudnn python mfu/bench_te_attn_shapes.py`.
 NVTX ranges `first_call_seq<S>` (first fwd+bwd at a new padded length) and `repeat_x5_seq<S>` (5 more calls, same length),
 for S in {193, 257, 311, 384, 402, 449, 512}. Means per range (7 lengths):
