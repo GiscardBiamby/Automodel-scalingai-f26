@@ -358,6 +358,22 @@ Recommendation: set `gc_every_steps` (or `gc.freeze()` after dataset constructio
 * The final 6-GPU config file reproduces without overrides over 100 steps: 13,946 tok/s/GPU median (vs 13,953
   in the 30-step ablation), mean step 2.30 s vs median 2.28 s, loss 5.35 → 0.05 with no instability under bf16
   gradient reduction (100 steps ≈ one SQuAD epoch at 190k tokens/step, so this cannot rule out long-horizon effects).
+* **End-to-end: one full SQuAD epoch** (87.6k training examples, 18.0 M real tokens) with each committed config
+  file, no overrides except `num_epochs=1` and validation every 25 steps on 1,000 SQuAD validation examples
+  (`results/epoch_summary.md`, `mfu/epoch_evidence.py`):
+
+  | 8×H100, 1 epoch | steps | wall time | median tok/s/GPU | epoch-average tok/s/GPU | useful MFU | peak mem | final val loss |
+  |---|---|---|---|---|---|---|---|
+  | baseline recipe (pad-to-longest, GBS 256 samples) | 343 | 26.7 min | 1,411 | 1,405 | 2.8% | 60.0 GiB | 0.0888 |
+  | final config (packed 4096, GBS 24 packs ≈ 480 samples) | 189 | **3.1 min** | 15,350 | 12,085 | **30.0%** | 70.6 GiB | 0.0895 |
+
+  Wall time includes warm-up and the validation passes, so the end-to-end speedup is 8.6× (10.9× in steady state).
+  Both runs reach the same validation loss (0.089, flat from ~5 M tokens onward), so the speedup does not cost model
+  quality (`results/figures/epoch_loss.png`). Train loss falls faster per token in the baseline early on because it
+  takes ~1.8× more optimizer steps per token (smaller batch in tokens). The baseline's median step drops from 5.8 s
+  (steps 5-49) to 4.6 s (steps 50+) as the per-shape attention graph cache fills with lengths already seen, which is
+  more evidence for H1. W&B: [final](https://wandb.ai/scalingai-f26/nemotron-nano-v3-mfu/runs/qb4tx2h8),
+  [baseline](https://wandb.ai/scalingai-f26/nemotron-nano-v3-mfu/runs/j257jv47).
 * Every run directory records the exact command, resolved config, git commit + diff, image and `nvidia-smi`
   (`mfu/runs/<ts>_<name>/`); small artefacts are copied to `mfu/results/`.
 * 40 steps per configuration; statistics exclude steps 0-4 (startup, first graph builds). Longer runs would lower

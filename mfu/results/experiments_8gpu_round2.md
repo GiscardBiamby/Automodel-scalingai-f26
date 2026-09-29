@@ -42,3 +42,13 @@ Row length (packing size), on the final config (bf16 RS, TE norm, 96 DeepEP SMs,
 
 Throughput is set by tokens per GPU per micro-batch (bounded by memory), not by row length; 4096-token rows give the
 finer granularity needed to reach the 12,288-token optimum.
+
+## Full-epoch end-to-end check (committed config files, `num_epochs=1`, val every 25 steps on 1,000 examples)
+
+| run | steps | wall time | median tok/s/GPU | epoch-average tok/s/GPU | useful MFU | peak mem | train loss | val loss |
+|---|---|---|---|---|---|---|---|---|
+| epoch_baseline | 343 | 26.7 min | 1,411 | 1,405 | 2.8% | 60.0 GiB | 5.245 → 0.040 | 1.929 → 0.0888 |
+| epoch_final8 | 189 | 3.1 min | 15,350 | 12,085 | 30.0% | 70.6 GiB | 5.151 → 0.053 | 0.753 → 0.0895 |
+
+8.6× end-to-end (10.9× steady state), same final validation loss. Figures `figures/epoch_loss.png`,
+`figures/epoch_progress.png`; W&B runs `qb4tx2h8` (final) and `j257jv47` (baseline).

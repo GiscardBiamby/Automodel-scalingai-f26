@@ -25,6 +25,7 @@ params) and for profiling where time goes. Target: 1 node, 8x H100 80GB SXM.
 | `bench_te_attn_shapes.py` | 1-GPU microbenchmark: TE fused attention first call at a new sequence length vs repeat |
 | `squad_lengths.py` | SQuAD token-length distribution and the padding / packing efficiency it implies |
 | `plots.py` | Report figures -> `results/figures/` (`uv run --no-project --with matplotlib python mfu/plots.py`) |
+| `epoch_evidence.py` | Full-epoch loss / progress figures + `results/epoch_summary.md` (`uv run --no-project --with matplotlib python mfu/epoch_evidence.py mfu/runs/<final> mfu/runs/<baseline>`) |
 | `REPORT.md` | Findings, evidence, interventions, results, recommendations |
 | `results/` | Small, committed artefacts per run (config, command, per-step metrics, nsys/CPU breakdowns) |
 | `runs/` | Full run outputs incl. `.nsys-rep` traces (git-ignored) |

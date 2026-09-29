@@ -1,0 +1,6 @@
+commit: 53966fbaad34d4edb55326c2565c0325a599c4c7 (mfu-study)
+image:  automodel-mfu:cu128
+gpus:   all (nproc 8)
+host:   instance-20260127-20260904-025803
+
+
