@@ -5,7 +5,7 @@ chat template), then reports the token-length distribution and the expected frac
 batching ``local_batch_size`` random samples padded to the longest (the baseline's ``default_collater``),
 versus packing to a fixed length.
 
-Usage: mfu/docker.sh -- python mfu/squad_lengths.py [--local-batch-size 8] [--pack 4096]
+Usage: mfu/docker.sh -- python mfu/squad_lengths.py [--local-batch-size 8] [--pack 4096] [--save-lengths FILE]
 """
 
 import argparse
@@ -25,6 +25,7 @@ def main() -> None:
     ap.add_argument("--local-batch-size", type=int, nargs="+", default=[1, 4, 8, 16, 32])
     ap.add_argument("--pack", type=int, nargs="+", default=[2048, 4096, 8192])
     ap.add_argument("--trials", type=int, default=2000)
+    ap.add_argument("--save-lengths", default=None, help="write every example's token length (JSON list) here")
     args = ap.parse_args()
 
     tok = AutoTokenizer.from_pretrained(MODEL, trust_remote_code=True)
@@ -32,6 +33,9 @@ def main() -> None:
     lengths = [len(x["input_ids"]) for x in ds]
     labels = [sum(1 for t in x["labels"] if t != -100) for x in ds]
     lengths_sorted = sorted(lengths)
+    if args.save_lengths:
+        with open(args.save_lengths, "w") as f:
+            json.dump(lengths, f, separators=(",", ":"))
 
     def q(p: float) -> int:
         return lengths_sorted[min(len(lengths_sorted) - 1, int(p * len(lengths_sorted)))]

@@ -128,7 +128,10 @@ wait time, which is why NCCL kernel time looks large.
 
 **H1 (primary). Dynamic shapes → cuDNN graph rebuilds → host stalls.** `default_collater` pads each micro-batch to
 its longest sample, and SQuAD lengths vary (mean 206, p50 193, p90 294, p99 429, max 1037 tokens;
-`results/squad_lengths.json`), so nearly every micro-batch has a new `[8, S]` shape. TE's cuDNN fused-attention
+`results/squad_lengths.json`), so nearly every micro-batch has a new `[8, S]` shape.
+
+![SQuAD length distribution](results/figures/squad_lengths.png)
+ TE's cuDNN fused-attention
 backend caches an execution graph per shape; a miss builds a new forward and backward graph.
 *Evidence:* (a) the two slow calls per micro-batch sit exactly in the first attention layer of forward and backward;
 (b) an isolated microbenchmark of the same layer configuration (`mfu/bench_te_attn_shapes.py`, 1 GPU) measures

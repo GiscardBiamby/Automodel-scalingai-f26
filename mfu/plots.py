@@ -216,6 +216,45 @@ def fig_timeline(suffix: str, title: str, fname: str) -> None:
     plt.close(fig)
 
 
+def fig_squad_lengths() -> None:
+    """Token-length distribution of the SQuAD training split as the recipe builds it (chat template applied)."""
+    path = pathlib.Path("mfu/results/squad_lengths_all.json")
+    if not path.exists():
+        return
+    import random
+
+    lengths = json.loads(path.read_text())
+    srt = sorted(lengths)
+    q = lambda p: srt[min(len(srt) - 1, int(p * len(srt)))]  # noqa: E731
+    mean = statistics.fmean(lengths)
+    rng = random.Random(0)
+    pad8 = statistics.fmean(max(rng.sample(lengths, 8)) for _ in range(5000))  # mean padded length at batch 8
+    xmax = 650
+    fig, ax = plt.subplots(figsize=(8, 3.4))
+    ax.hist([v for v in lengths if v <= xmax], bins=range(0, xmax + 8, 8), color=SERIES[0], edgecolor=SURFACE,
+            linewidth=0.6)
+    top = ax.get_ylim()[1]
+    marks = [(f"p50 {q(0.5)}", q(0.5)), (f"mean {mean:.0f}", mean), (f"p90 {q(0.9)}", q(0.9)),
+             (f"p99 {q(0.99)}", q(0.99))]
+    for i, (label, x) in enumerate(marks):
+        ax.axvline(x, color=INK2, linestyle="--", linewidth=1)
+        ax.text(x + 4, top * (0.93 - 0.09 * (i % 2)), label, fontsize=8, color=INK, va="top")
+    ax.axvline(pad8, color=SERIES[1], linewidth=2)
+    ax.text(pad8 + 4, top * 0.62, f"typical padded length,\nbatch of 8 ({pad8:.0f}):\n~1/3 of positions are padding",
+            fontsize=8, color=INK, va="top")
+    ax.text(xmax - 4, top * 0.3, f"max {srt[-1]:,}\n({sum(v > xmax for v in lengths)} examples > {xmax}, not shown)",
+            fontsize=8, color=INK2, ha="right", va="top")
+    ax.set_xlim(0, xmax)
+    ax.set_xlabel("tokens per example (prompt + answer, chat template)")
+    ax.set_ylabel("examples")
+    ax.grid(axis="x", visible=False)
+    ax.set_title(f"SQuAD train: token lengths of {len(lengths):,} examples (Nemotron-Nano-V3 tokenizer)", loc="left",
+                 fontsize=10)
+    fig.tight_layout()
+    fig.savefig(OUT / "squad_lengths.png", dpi=180)
+    plt.close(fig)
+
+
 RUNS_6GPU = [  # (label, run-dir suffix): each row adds one change to the previous one
     ("baseline\n(6 GPU)", "_baseline_6gpu"),
     ("packing +\nfused CE +\n2 packs + GC", "_best_6gpu"),
@@ -304,6 +343,7 @@ if __name__ == "__main__":
     fig_budget()
     fig_step_times()
     fig_6gpu()
+    fig_squad_lengths()
     fig_8gpu_round2()
     fig_timeline("_baseline_nsys", "Baseline: one step on GPU 0 (4 micro-batches); red = TE/cuDNN attention graph builds",
                  "timeline_baseline.png")
